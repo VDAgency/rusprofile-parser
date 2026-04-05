@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Парсер компаний</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Поиск компаний</h1>
+        <p class="subtitle">Настройте фильтры и запустите парсинг</p>
+
+        <form id="searchForm">
+            <!-- Регион -->
+            <div class="form-group">
+                <label for="region">Регион</label>
+                <select id="region" name="region">
+                    <option value="">Все регионы</option>
+                </select>
+            </div>
+
+            <!-- ОКВЭД -->
+            <div class="form-group">
+                <label for="okved">ОКВЭД (вид деятельности)</label>
+                <input type="text" id="okved" name="okved"
+                       placeholder="Код или название (напр. 46.90 или торговля)">
+            </div>
+
+            <!-- Выручка -->
+            <div class="form-group">
+                <label>Выручка за год (руб.)</label>
+                <div class="range-inputs">
+                    <input type="number" id="revenue_from" name="revenue_from"
+                           placeholder="От" min="0">
+                    <span class="separator">—</span>
+                    <input type="number" id="revenue_to" name="revenue_to"
+                           placeholder="До" min="0">
+                </div>
+            </div>
+
+            <!-- Тип организации -->
+            <div class="form-group">
+                <label for="org_type">Тип организации</label>
+                <select id="org_type" name="org_type">
+                    <option value="">Все типы</option>
+                    <option value="ooo">ООО</option>
+                    <option value="ao">АО</option>
+                    <option value="ip">ИП</option>
+                    <option value="nko">НКО</option>
+                </select>
+            </div>
+
+            <!-- Размер бизнеса -->
+            <div class="form-group">
+                <label for="business_size">Размер бизнеса</label>
+                <select id="business_size" name="business_size">
+                    <option value="">Любой</option>
+                    <option value="micro">Микро</option>
+                    <option value="small">Малый</option>
+                    <option value="medium">Средний</option>
+                    <option value="large">Крупный</option>
+                </select>
+            </div>
+
+            <!-- Наличие контактов -->
+            <div class="form-group">
+                <label>Наличие контактов</label>
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="has_phone" name="has_phone">
+                        <span>Телефон</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="has_site" name="has_site">
+                        <span>Сайт</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="has_email" name="has_email">
+                        <span>Email</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Кнопка запуска -->
+            <button type="submit" id="submitBtn" class="btn-primary">
+                Запустить парсинг
+            </button>
+        </form>
+
+        <!-- Статус -->
+        <div id="statusBlock" class="status-block hidden">
+            <div class="status-text" id="statusText">Подготовка...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-info" id="progressInfo"></div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
