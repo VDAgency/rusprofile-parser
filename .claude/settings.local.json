@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "Bash(pip install:*)",
+      "Bash(playwright install:*)",
+      "Bash(git config:*)",
+      "Bash(python -m pip install playwright)",
+      "Bash(python -m pip install -r requirements.txt)",
+      "Bash(gh auth:*)",
+      "Bash(python -c \"import playwright; print\\(playwright.__version__\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(winget install:*)",
+      "Bash(cmd.exe /c \"winget install GitHub.cli --accept-package-agreements --accept-source-agreements\")",
+      "Bash(cmd.exe /c \"where gh\")",
+      "Read(//c/Program Files/GitHub CLI//**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Read(//c/Users/User/AppData/**)",
+      "Bash(export PATH=\"/c/Program Files/GitHub CLI:$PATH\")",
+      "Bash(python -c \"import playwright; print\\('playwright OK'\\)\")",
+      "Bash(gh repo:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
