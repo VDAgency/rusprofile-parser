@@ -12,9 +12,15 @@ build/
 
 # Logs
 logs/*.log
+logs/diag*
+logs/*.html
 
 # Config secrets
 config/credentials.json
+config/cookies.json
+
+# Claude Code локальные настройки (могут содержать секреты)
+.claude/settings.local.json
 
 # IDE
 .vscode/

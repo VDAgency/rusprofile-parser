@@ -3,14 +3,21 @@
 import asyncio
 import logging
 import random
-from dataclasses import dataclass, field, asdict
+import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 from bs4 import BeautifulSoup
 from playwright.async_api import BrowserContext, Page
 
-from src.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, MAX_PAGES
+from src.config import (
+    REQUEST_DELAY_MIN,
+    REQUEST_DELAY_MAX,
+    MAX_PAGES,
+    RUSPROFILE_LOGIN,
+)
+from src.rusprofile.auth import _goto
 from src.rusprofile.filters import SearchFilters, build_search_url
 
 logger = logging.getLogger(__name__)
@@ -35,6 +42,9 @@ class Company:
     ai_status: str = ""
     ai_comment: str = ""
     parse_date: str = ""
+    # Относительная ссылка на детальную страницу (/id/NNN); не выгружается
+    # в Google Sheets, используется только для enrich_company_details.
+    detail_href: str = ""
 
     def to_row(self) -> list[str]:
         """Конвертирует в строку для Google Sheets."""
@@ -57,76 +67,81 @@ class Company:
         ]
 
 
-def _parse_company_card(card) -> Optional[Company]:
-    """Извлекает данные компании из карточки в поисковой выдаче."""
+_DIGITS = str.maketrans("", "", " \u00a0\t")
+
+
+def _extract_number(text: str) -> str:
+    """Возвращает только цифры из строки."""
+    return "".join(c for c in text if c.isdigit())
+
+
+def _parse_company_card(card) -> Optional[tuple["Company", str]]:
+    """Извлекает данные компании из одной карточки в поисковой выдаче.
+
+    Разметка Rusprofile (актуальна на 2026-04):
+
+        <div class="list-element">
+          <a href="/id/123456" class="list-element__title">ООО "РОМАШКА"</a>
+          <div class="list-element__text warning">...признак недостоверности...</div>
+          <span class="list-element__text">ОКВЭД / описание</span>
+          <span class="list-element__text">доп. текст</span>
+          <div class="list-element__address">адрес</div>
+          <div class="list-element__row-info">
+            <span>ИНН: ...</span>
+            <span>ОГРН: ...</span>
+            <span>Дата регистрации: ...</span>
+          </div>
+        </div>
+    """
     try:
         company = Company(parse_date=datetime.now().strftime("%d.%m.%Y"))
 
-        # Название компании
-        name_el = card.select_one(
-            ".company-name, .company-item__title a, "
-            "[class*='companyName'], h4 a, .search-result__title a"
-        )
-        if name_el:
-            company.name = name_el.get_text(strip=True)
+        title = card.select_one("a.list-element__title")
+        if not title:
+            return None
+        company.name = title.get_text(strip=True).replace("\xa0", " ")
+        href = (title.get("href") or "").strip()
 
-        # ИНН
-        inn_el = card.select_one("[class*='inn'], .company-item__info")
-        if inn_el:
-            text = inn_el.get_text(strip=True)
-            # Извлекаем ИНН из текста
-            if "ИНН" in text:
-                parts = text.split("ИНН")
-                if len(parts) > 1:
-                    inn_value = "".join(c for c in parts[1][:15] if c.isdigit())
-                    company.inn = inn_value
-            elif text.isdigit():
-                company.inn = text
-
-        # ОГРН
-        ogrn_el = card.select_one("[class*='ogrn']")
-        if ogrn_el:
-            text = ogrn_el.get_text(strip=True)
-            if "ОГРН" in text:
-                parts = text.split("ОГРН")
-                if len(parts) > 1:
-                    ogrn_value = "".join(c for c in parts[1][:18] if c.isdigit())
-                    company.ogrn = ogrn_value
-            elif text.isdigit():
-                company.ogrn = text
-
-        # Адрес и регион
-        addr_el = card.select_one(
-            "[class*='address'], .company-item__text, [class*='region']"
-        )
+        addr_el = card.select_one(".list-element__address")
         if addr_el:
             company.address = addr_el.get_text(strip=True)
-            # Регион — первая часть адреса
-            addr_parts = company.address.split(",")
-            if addr_parts:
-                company.region = addr_parts[0].strip()
+            parts = [p.strip() for p in company.address.split(",") if p.strip()]
+            # Регион Rusprofile обычно указывает как «Ставропольский край» вторым
+            # элементом (первый — индекс). Берём второй, если он явно не индекс.
+            if len(parts) >= 2 and not parts[0].isdigit():
+                company.region = parts[0]
+            elif len(parts) >= 2:
+                company.region = parts[1]
 
-        # ОКВЭД
-        okved_el = card.select_one("[class*='okved'], [class*='activity']")
-        if okved_el:
-            company.okved = okved_el.get_text(strip=True)
+        info = card.select(".list-element__row-info span")
+        for span in info:
+            text = span.get_text(strip=True)
+            low = text.lower()
+            if "инн" in low:
+                company.inn = _extract_number(text)
+            elif "огрн" in low:
+                company.ogrn = _extract_number(text)
 
-        # Выручка
-        revenue_el = card.select_one("[class*='revenue'], [class*='finance']")
-        if revenue_el:
-            company.revenue = revenue_el.get_text(strip=True)
+        # Текстовые блоки (без .warning — там статусы/предупреждения)
+        texts = [
+            el.get_text(strip=True)
+            for el in card.select(".list-element__text")
+            if "warning" not in (el.get("class") or [])
+        ]
+        texts = [t for t in texts if t]
+        if texts:
+            # Обычно первый блок — ОКВЭД/описание деятельности, второй — доп. инфо
+            company.okved = texts[0]
 
-        # Статус компании
-        status_el = card.select_one("[class*='status']")
-        if status_el:
-            company.status = status_el.get_text(strip=True)
+        warning_el = card.select_one(".list-element__text.warning")
+        if warning_el:
+            company.status = warning_el.get_text(strip=True)
         else:
             company.status = "Действующая"
 
         if not company.name:
             return None
-
-        return company
+        return company, href
 
     except Exception as e:
         logger.warning("Ошибка парсинга карточки: %s", e)
@@ -134,69 +149,79 @@ def _parse_company_card(card) -> Optional[Company]:
 
 
 def _parse_company_page(html: str) -> Optional[dict]:
-    """Извлекает детальные данные со страницы компании."""
+    """Извлекает детальные данные со страницы компании.
+
+    Источники на странице:
+    - ``a[href^='tel:']`` — телефон (на странице может быть несколько:
+      основной + из публичного справочника). Берём первый.
+    - ``a[href^='mailto:']`` — email. Rusprofile дополнительно вставляет
+      в шапку адрес ТЕКУЩЕГО авторизованного пользователя, поэтому
+      исключаем значение ``RUSPROFILE_LOGIN``.
+    - Блок финансов содержит текст «Выручка N руб.», «Прибыль N руб.» —
+      разбираем регулярками.
+    - Сайт компании — ссылка рядом с «Сайт:» / «Интернет-сайт:».
+    """
     soup = BeautifulSoup(html, "lxml")
     data = {}
 
-    # Телефон
-    phone_el = soup.select_one(
-        "[class*='phone'], [href^='tel:'], .company-info__phone"
-    )
-    if phone_el:
-        href = phone_el.get("href", "")
-        if href.startswith("tel:"):
-            data["phone"] = href.replace("tel:", "").strip()
-        else:
-            data["phone"] = phone_el.get_text(strip=True)
+    tel_links = soup.select("a[href^='tel:']")
+    if tel_links:
+        phone_text = tel_links[0].get_text(strip=True) or tel_links[0]["href"][4:]
+        data["phone"] = phone_text.strip()
 
-    # Email
-    email_el = soup.select_one(
-        "[class*='email'], [href^='mailto:'], .company-info__email"
-    )
-    if email_el:
-        href = email_el.get("href", "")
-        if href.startswith("mailto:"):
-            data["email"] = href.replace("mailto:", "").strip()
-        else:
-            data["email"] = email_el.get_text(strip=True)
+    own_email = (RUSPROFILE_LOGIN or "").strip().lower()
+    for a in soup.select("a[href^='mailto:']"):
+        value = a["href"].replace("mailto:", "").strip()
+        if value and value.lower() != own_email:
+            data["email"] = value
+            break
 
-    # Сайт
-    site_el = soup.select_one(
-        "[class*='website'] a, [class*='site'] a, .company-info__site a"
-    )
-    if site_el:
-        data["site"] = site_el.get_text(strip=True)
+    # Сайт: пробуем явный блок «Сайт:» с внешней ссылкой
+    for label in soup.find_all(string=lambda s: isinstance(s, str) and "сайт" in s.lower()):
+        parent = label.parent
+        if parent is None:
+            continue
+        for a in parent.find_all_next("a", limit=3):
+            href = (a.get("href") or "").strip()
+            if href.startswith(("http://", "https://")) and "rusprofile.ru" not in href:
+                data["site"] = href
+                break
+        if "site" in data:
+            break
 
-    # ОГРН (если не было в карточке)
-    ogrn_el = soup.select_one("[class*='ogrn']")
-    if ogrn_el:
-        text = ogrn_el.get_text(strip=True)
-        ogrn_value = "".join(c for c in text if c.isdigit())
-        if len(ogrn_value) >= 13:
-            data["ogrn"] = ogrn_value
-
-    # Выручка — ищем в финансовых данных
-    for el in soup.select("[class*='finance'], [class*='revenue'], .finance-item"):
-        text = el.get_text(strip=True)
-        if "выручка" in text.lower():
-            data["revenue"] = text
-
-    # Прибыль
-    for el in soup.select("[class*='finance'], [class*='profit'], .finance-item"):
-        text = el.get_text(strip=True)
-        if "прибыль" in text.lower():
-            data["profit"] = text
+    # Финансы — блок .finance-columns содержит строку вида:
+    # «Выручка 4,5 млрд руб. ↑ +47 % Прибыль 12 млн руб. ↑ +23 % Стоимость ...»
+    fin = soup.select_one(".finance-columns, .finance-tile-columns")
+    if fin:
+        fin_text = fin.get_text(" ", strip=True)
+        m = re.search(
+            r"Выручка\s+(.+?)(?=\s+(?:Прибыль|Стоимость|Убыток)|$)",
+            fin_text,
+        )
+        if m:
+            data["revenue"] = m.group(1).strip()
+        m = re.search(
+            r"Прибыль\s+(.+?)(?=\s+(?:Стоимость|Выручка|Убыток)|$)",
+            fin_text,
+        )
+        if m:
+            data["profit"] = m.group(1).strip()
 
     return data
 
 
 async def _get_page_html(page: Page, url: str) -> str:
-    """Загружает страницу и возвращает HTML."""
-    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    # Ждём загрузки контента
+    """Загружает страницу и возвращает HTML.
+
+    Использует устойчивый ``_goto`` из ``auth.py``: warmup через
+    ``about:blank``, ``wait_until='commit'`` и ретраи при таймауте.
+    """
+    await _goto(page, url, timeout=45000)
     await page.wait_for_timeout(2000)
-    # Прокрутка для подгрузки динамического контента
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    try:
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    except Exception:
+        pass
     await page.wait_for_timeout(1000)
     return await page.content()
 
@@ -217,6 +242,7 @@ async def parse_search_results(
         список компаний
     """
     companies = []
+    seen_inn: set[str] = set()
     page = await context.new_page()
 
     try:
@@ -231,37 +257,37 @@ async def parse_search_results(
             html = await _get_page_html(page, url)
             soup = BeautifulSoup(html, "lxml")
 
-            # Ищем карточки компаний
-            cards = soup.select(
-                ".company-item, .search-result-item, "
-                "[class*='companyItem'], .search-result__item, "
-                ".company-row, [data-company-id]"
-            )
-
-            if not cards:
-                # Пробуем альтернативные селекторы
-                cards = soup.select("div[class*='company'], div[class*='search-result']")
+            cards = soup.select(".list-element")
 
             if not cards:
                 logger.info("Больше результатов нет (страница %d)", current_page)
                 break
 
-            # Общее количество результатов (из заголовка)
+            # Общее количество результатов — в заголовке
+            # «найдено 1135 юридических лиц, 16 ... и 21 ...»
             if current_page == 1:
-                total_el = soup.select_one(
-                    "[class*='total'], [class*='count'], .search-result__count"
-                )
-                if total_el:
-                    total_text = total_el.get_text(strip=True)
-                    digits = "".join(c for c in total_text if c.isdigit())
-                    if digits:
-                        total_found = int(digits)
-                        logger.info("Всего найдено: %d компаний", total_found)
+                header = soup.select_one(".search-result h1, h1")
+                if header:
+                    header_text = header.get_text(" ", strip=True)
+                    nums = [int(n) for n in re.findall(r"\d+", header_text)]
+                    if nums:
+                        total_found = sum(nums)
+                        logger.info("Всего найдено: %d компаний (из заголовка)", total_found)
 
+            new_on_page = 0
             for card in cards:
-                company = _parse_company_card(card)
-                if company:
-                    companies.append(company)
+                parsed = _parse_company_card(card)
+                if not parsed:
+                    continue
+                company, href = parsed
+                # Убираем дубликаты (редко, но бывают «похожие» карточки)
+                if company.inn and company.inn in seen_inn:
+                    continue
+                if company.inn:
+                    seen_inn.add(company.inn)
+                company.detail_href = href
+                companies.append(company)
+                new_on_page += 1
 
             if progress_callback:
                 await progress_callback(
@@ -269,9 +295,15 @@ async def parse_search_results(
                 )
 
             logger.info(
-                "Страница %d: найдено %d карточек, всего собрано %d",
-                current_page, len(cards), len(companies),
+                "Страница %d: карточек %d, новых %d, всего собрано %d",
+                current_page, len(cards), new_on_page, len(companies),
             )
+
+            # Если на странице не появилось ни одной новой карточки —
+            # выдача кончилась или зациклилась, выходим.
+            if new_on_page == 0:
+                logger.info("На странице %d нет новых карточек — стоп", current_page)
+                break
 
             # Задержка между запросами
             delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
@@ -294,45 +326,34 @@ async def enrich_company_details(
 ) -> list[Company]:
     """Дополняет данные компаний деталями с их страниц (телефон, email, сайт).
 
-    Переходит на страницу каждой компании и собирает контактные данные.
+    Использует ссылку, уже сохранённую в карточке поисковой выдачи
+    (``company._detail_href``). Если её нет — пропускает.
     """
     page = await context.new_page()
 
     try:
         for i, company in enumerate(companies):
-            if not company.inn:
+            href = company.detail_href
+            if not href:
                 continue
 
+            url = href if href.startswith("http") else f"https://www.rusprofile.ru{href}"
+
             try:
-                detail_url = f"https://www.rusprofile.ru/search?query={company.inn}"
-                html = await _get_page_html(page, detail_url)
-                soup = BeautifulSoup(html, "lxml")
+                html = await _get_page_html(page, url)
+                details = _parse_company_page(html)
 
-                # Ищем ссылку на страницу компании
-                link = soup.select_one(
-                    ".company-item__title a, .company-name a, "
-                    "[class*='companyName'] a, h4 a"
-                )
-                if link and link.get("href"):
-                    href = link["href"]
-                    if not href.startswith("http"):
-                        href = f"https://www.rusprofile.ru{href}"
-                    html = await _get_page_html(page, href)
-                    details = _parse_company_page(html)
-
-                    if details:
-                        if details.get("phone") and not company.phone:
-                            company.phone = details["phone"]
-                        if details.get("email") and not company.email:
-                            company.email = details["email"]
-                        if details.get("site") and not company.site:
-                            company.site = details["site"]
-                        if details.get("ogrn") and not company.ogrn:
-                            company.ogrn = details["ogrn"]
-                        if details.get("revenue") and not company.revenue:
-                            company.revenue = details["revenue"]
-                        if details.get("profit") and not company.profit:
-                            company.profit = details["profit"]
+                if details:
+                    if details.get("phone") and not company.phone:
+                        company.phone = details["phone"]
+                    if details.get("email") and not company.email:
+                        company.email = details["email"]
+                    if details.get("site") and not company.site:
+                        company.site = details["site"]
+                    if details.get("revenue") and not company.revenue:
+                        company.revenue = details["revenue"]
+                    if details.get("profit") and not company.profit:
+                        company.profit = details["profit"]
 
                 if progress_callback:
                     await progress_callback(len(companies), i + 1)

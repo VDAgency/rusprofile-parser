@@ -7,9 +7,8 @@ import logging
 from aiogram import Router, F
 from aiogram.types import (
     Message,
-    WebAppData,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     WebAppInfo,
 )
 from aiogram.filters import CommandStart, Command
@@ -27,39 +26,73 @@ router = Router()
 # Хранилище активных задач парсинга
 _active_tasks: dict[int, asyncio.Task] = {}
 
+# Тексты кнопок постоянного меню (reply keyboard)
+BTN_PARSE = "🚀 Открыть парсер"
+BTN_SHEET = "📊 Таблица"
+BTN_STATUS = "⚙️ Статус"
+BTN_HELP = "ℹ️ Помощь"
+
+
+def _get_main_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура внизу экрана."""
+    buttons = []
+
+    if TELEGRAM_WEBAPP_URL:
+        buttons.append([
+            KeyboardButton(text=BTN_PARSE, web_app=WebAppInfo(url=TELEGRAM_WEBAPP_URL)),
+        ])
+
+    buttons.append([
+        KeyboardButton(text=BTN_SHEET),
+        KeyboardButton(text=BTN_STATUS),
+    ])
+    buttons.append([
+        KeyboardButton(text=BTN_HELP),
+    ])
+
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Обработчик команды /start."""
     kb = _get_main_keyboard()
-    await message.answer(
+    text = (
         "Привет! Я бот для парсинга компаний с Rusprofile.\n\n"
-        "Нажмите кнопку ниже, чтобы открыть форму поиска, "
-        "или используйте команды:\n"
-        "/search — быстрый поиск по ИНН/названию\n"
+        "Нажмите «🚀 Открыть парсер», чтобы задать фильтры и запустить поиск.\n\n"
+        "Доступные команды:\n"
+        "/search &lt;запрос&gt; — быстрый поиск по ИНН или названию\n"
         "/status — статус текущего парсинга\n"
-        "/help — помощь",
-        reply_markup=kb,
+        "/stop — остановить парсинг\n"
+        "/sheet — ссылка на Google таблицу\n"
+        "/help — эта справка"
     )
+    await message.answer(text, reply_markup=kb)
 
 
 @router.message(Command("help"))
+@router.message(F.text == BTN_HELP)
 async def cmd_help(message: Message):
     """Справка по командам."""
     await message.answer(
         "Команды бота:\n\n"
         "/start — главное меню\n"
-        "/search <запрос> — быстрый поиск по ИНН или названию\n"
+        "/search &lt;запрос&gt; — быстрый поиск по ИНН или названию\n"
         "/status — статус текущего парсинга\n"
         "/stop — остановить парсинг\n"
         "/sheet — ссылка на Google таблицу\n"
         "/help — эта справка\n\n"
-        "Для расширенного поиска с фильтрами нажмите кнопку "
-        "«Открыть парсер» в главном меню.",
+        "Для расширенного поиска с фильтрами нажмите "
+        "«🚀 Открыть парсер» в меню.",
     )
 
 
 @router.message(Command("sheet"))
+@router.message(F.text == BTN_SHEET)
 async def cmd_sheet(message: Message):
     """Ссылка на Google таблицу."""
     url = get_sheet_url()
@@ -67,6 +100,7 @@ async def cmd_sheet(message: Message):
 
 
 @router.message(Command("status"))
+@router.message(F.text == BTN_STATUS)
 async def cmd_status(message: Message):
     """Статус текущего парсинга."""
     user_id = message.from_user.id
@@ -88,6 +122,11 @@ async def cmd_stop(message: Message):
         await message.answer("Нет активных задач для остановки.")
 
 
+def _has_active_task(user_id: int) -> bool:
+    task = _active_tasks.get(user_id)
+    return task is not None and not task.done()
+
+
 @router.message(Command("search"))
 async def cmd_search(message: Message):
     """Быстрый поиск по ИНН или названию."""
@@ -96,11 +135,15 @@ async def cmd_search(message: Message):
         await message.answer("Укажите ИНН или название:\n/search 7701234567")
         return
 
-    await message.answer(f"Ищу: {query}...")
-
-    filters = SearchFilters(query=query)
     user_id = message.from_user.id
+    if _has_active_task(user_id):
+        await message.answer(
+            "У вас уже выполняется парсинг. Дождитесь его завершения или /stop."
+        )
+        return
 
+    await message.answer(f"Ищу: {query}...")
+    filters = SearchFilters(query=query)
     task = asyncio.create_task(_run_parsing(message, filters))
     _active_tasks[user_id] = task
 
@@ -111,6 +154,13 @@ async def handle_webapp_data(message: Message):
     try:
         data = json.loads(message.web_app_data.data)
         logger.info("Получены данные из Mini App: %s", data)
+
+        user_id = message.from_user.id
+        if _has_active_task(user_id):
+            await message.answer(
+                "У вас уже выполняется парсинг. Дождитесь завершения или /stop."
+            )
+            return
 
         filters = SearchFilters(
             region=data.get("region"),
@@ -125,8 +175,6 @@ async def handle_webapp_data(message: Message):
         )
 
         await message.answer("Запускаю парсинг с заданными фильтрами...")
-        user_id = message.from_user.id
-
         task = asyncio.create_task(_run_parsing(message, filters))
         _active_tasks[user_id] = task
 
@@ -145,7 +193,6 @@ async def _run_parsing(message: Message, filters: SearchFilters):
         async with async_playwright() as pw:
             context = await get_authenticated_context(pw)
 
-            # Прогресс-коллбэк
             async def on_progress(total: int, processed: int):
                 try:
                     await status_msg.edit_text(
@@ -156,7 +203,6 @@ async def _run_parsing(message: Message, filters: SearchFilters):
                 except Exception:
                     pass  # Telegram может ограничить частоту редактирования
 
-            # Парсим поисковую выдачу
             await status_msg.edit_text("Ищу компании по заданным фильтрам...")
             companies = await parse_search_results(context, filters, on_progress)
 
@@ -167,7 +213,6 @@ async def _run_parsing(message: Message, filters: SearchFilters):
                 await context.browser.close()
                 return
 
-            # Обогащаем детальными данными
             await status_msg.edit_text(
                 f"Найдено {len(companies)} компаний. Собираю контактные данные..."
             )
@@ -175,7 +220,6 @@ async def _run_parsing(message: Message, filters: SearchFilters):
 
             await context.browser.close()
 
-        # Выгружаем в Google Sheets
         await status_msg.edit_text("Выгружаю результаты в Google Sheets...")
         sheet_url = write_companies(companies)
 
@@ -192,28 +236,6 @@ async def _run_parsing(message: Message, filters: SearchFilters):
     finally:
         user_id = message.from_user.id
         _active_tasks.pop(user_id, None)
-
-
-def _get_main_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура главного меню."""
-    buttons = []
-
-    if TELEGRAM_WEBAPP_URL:
-        buttons.append([
-            InlineKeyboardButton(
-                text="Открыть парсер",
-                web_app=WebAppInfo(url=TELEGRAM_WEBAPP_URL),
-            )
-        ])
-
-    buttons.append([
-        InlineKeyboardButton(text="Google таблица", callback_data="show_sheet")
-    ])
-    buttons.append([
-        InlineKeyboardButton(text="Помощь", callback_data="show_help")
-    ])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _parse_int(value) -> int | None:
