@@ -1,4 +1,9 @@
-"""Формирование URL с фильтрами для расширенного поиска Rusprofile."""
+"""Формирование URL расширенного поиска Rusprofile.
+
+Реальные имена параметров подсмотрены в форме ``/search-advanced`` и сабмите
+формы (см. ``scripts/diag_filters_*.py``). Комментарии ниже помечают,
+что подтверждено, а что требует ещё одного прохода диагностики.
+"""
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -7,37 +12,55 @@ from urllib.parse import urlencode
 from src.config import RUSPROFILE_BASE_URL
 
 
-@dataclass
-class SearchFilters:
-    """Параметры фильтрации для поиска компаний на Rusprofile."""
+# ---- справочные константы -------------------------------------------------
 
-    # Регион (код региона, например "77" для Москвы)
-    region: Optional[str] = None
-    # ОКВЭД (код, например "46.90")
-    okved: Optional[str] = None
-    # Выручка
-    revenue_from: Optional[int] = None  # в рублях
-    revenue_to: Optional[int] = None
-    # Прибыль
-    profit_from: Optional[int] = None
-    profit_to: Optional[int] = None
-    # Тип организации: "ooo", "ao", "ip"
-    org_type: Optional[str] = None
-    # Статус: "active", "liquidating", "liquidated"
-    status: str = "active"
-    # Наличие контактов
-    has_phone: bool = False
-    has_site: bool = False
-    has_email: bool = False
-    # Размер бизнеса: "micro", "small", "medium", "large"
-    business_size: Optional[str] = None
-    # Текстовый поиск
-    query: Optional[str] = None
-    # Страница
-    page: int = 1
+# Коды статусов компании (id чекбоксов в виджете «Статус» на Rusprofile)
+STATUS_ACTIVE = "1"
+STATUS_REORG = "2"
+STATUS_LIQUIDATING = "3"
+STATUS_BANKRUPT = "4"
+STATUS_LIQUIDATED = "5"
+
+STATUS_LABELS = {
+    STATUS_ACTIVE: "Действующая",
+    STATUS_REORG: "В процессе реорганизации",
+    STATUS_LIQUIDATING: "В процессе ликвидации",
+    STATUS_BANKRUPT: "В процессе банкротства",
+    STATUS_LIQUIDATED: "Ликвидированная",
+}
+
+# Размер бизнеса — Реестр МСП (значения идут как есть, uppercase).
+MSP_MICRO = "MICRO"
+MSP_SMALL = "SMALL"
+MSP_MEDIUM = "MEDIUM"
+MSP_NO = "NO"  # «Нет в реестре»
+
+MSP_LABELS = {
+    MSP_MICRO: "Микропредприятие",
+    MSP_SMALL: "Малое",
+    MSP_MEDIUM: "Среднее",
+    MSP_NO: "Нет в реестре МСП",
+}
+
+# Частые правовые формы (ОКОПФ). Полный справочник большой, нам достаточно
+# тех, что реально встречаются в B2B-выборках клиента (сувенирная продукция).
+LEGAL_FORM_OOO = "12300"    # Общество с ограниченной ответственностью
+LEGAL_FORM_AO = "12247"     # Акционерное общество (непубличное)
+LEGAL_FORM_PAO = "12267"    # Публичное акционерное общество
+LEGAL_FORM_IP = "50102"     # Индивидуальный предприниматель (коды МСП-физлиц)
+LEGAL_FORM_NKO = "70000"    # Некоммерческие организации (собирательно)
+
+LEGAL_FORM_LABELS = {
+    LEGAL_FORM_OOO: "ООО",
+    LEGAL_FORM_AO: "АО",
+    LEGAL_FORM_PAO: "ПАО",
+    LEGAL_FORM_IP: "ИП",
+    LEGAL_FORM_NKO: "НКО",
+}
 
 
-# Коды регионов РФ
+# ---- регионы --------------------------------------------------------------
+
 REGIONS = {
     "01": "Республика Адыгея",
     "02": "Республика Башкортостан",
@@ -127,38 +150,177 @@ REGIONS = {
 }
 
 
+# ---- фильтры --------------------------------------------------------------
+
+@dataclass
+class SearchFilters:
+    """Параметры расширенного поиска Rusprofile.
+
+    Поля сгруппированы по разделам формы ``/search-advanced``.
+    Имена атрибутов совпадают с URL-параметрами, чтобы при генерации URL
+    не было переименований.
+    """
+
+    # --- Название ----------------------------------------------------------
+    # Текст: название, ОГРН, ИНН, адрес, руководитель, учредитель.
+    query: Optional[str] = None
+
+    # --- Статус (виджет, коды STATUS_*) -----------------------------------
+    # TODO: имя URL-параметра требует подтверждения сабмитом (скорее всего
+    #       ``state[]=1&state[]=2`` или ``status=1,2``). Пока игнорируется
+    #       при построении URL; фильтр по статусу можно делать на этапе
+    #       парсинга (companies с company.status == "Действующая").
+    status: list[str] = field(default_factory=list)
+
+    # --- Вид деятельности (ОКВЭД, виджет с деревом чекбоксов) -------------
+    # TODO: подтвердить URL-параметр сабмитом. Предположительно
+    #       ``okved[]=46.90&okved[]=46.49``.
+    okved: list[str] = field(default_factory=list)
+    # Искать только в основных видах деятельности
+    okved_strict: bool = False
+
+    # --- Дата регистрации (dd.mm.YYYY или YYYY-MM-DD) --------------------
+    date_begin: Optional[str] = None
+    date_end: Optional[str] = None
+
+    # --- Регион (виджет, коды REGIONS) ------------------------------------
+    # TODO: подтвердить URL-параметр сабмитом. Предположительно
+    #       ``region[]=77``.
+    region: list[str] = field(default_factory=list)
+
+    # --- Уставный капитал, руб. -------------------------------------------
+    capital_from: Optional[int] = None
+    capital_to: Optional[int] = None
+
+    # --- Количество сотрудников (среднесписочная численность) -------------
+    sshr_from: Optional[int] = None
+    sshr_to: Optional[int] = None
+
+    # --- Реестр МСП (виджет, коды MSP_*) ----------------------------------
+    # TODO: подтвердить URL-параметр сабмитом. Предположительно
+    #       ``msp[]=SMALL``.
+    msp: list[str] = field(default_factory=list)
+
+    # --- Правовая форма (виджет, коды LEGAL_FORM_*) -----------------------
+    # TODO: подтвердить URL-параметр сабмитом. Предположительно
+    #       ``okopf[]=12300``.
+    okopf: list[str] = field(default_factory=list)
+
+    # --- Контакты ---------------------------------------------------------
+    has_phones: bool = False
+    has_emails: bool = False
+    has_sites: bool = False
+
+    # --- Бухотчётность ----------------------------------------------------
+    # Есть отчёт за актуальный год
+    finance_has_actual_year_data: bool = False
+
+    # --- Выручка, руб. -----------------------------------------------------
+    finance_revenue_from: Optional[int] = None
+    finance_revenue_to: Optional[int] = None
+
+    # --- Прибыль, руб. ----------------------------------------------------
+    finance_profit_from: Optional[int] = None
+    finance_profit_to: Optional[int] = None
+
+    # --- Стоимость компании, руб. -----------------------------------------
+    finance_value_from: Optional[int] = None
+    finance_value_to: Optional[int] = None
+
+    # --- Госзакупки (кол-во контрактов) -----------------------------------
+    gz_supplier_cnt_from: Optional[int] = None
+    gz_supplier_cnt_to: Optional[int] = None
+
+    # --- Госзакупки (сумма контрактов, руб.) ------------------------------
+    gz_all_sum_from: Optional[int] = None
+    gz_all_sum_to: Optional[int] = None
+
+    # --- Арбитраж (сумма исков, руб.) -------------------------------------
+    arbitr_claim_sum_from: Optional[int] = None
+    arbitr_claim_sum_to: Optional[int] = None
+    # Не был ответчиком за последний год
+    not_defendant: bool = False
+
+    # --- Пагинация --------------------------------------------------------
+    page: int = 1
+
+
+# Поля, которые напрямую превращаются в URL-параметр с тем же именем.
+# Виджеты (status/okved/region/msp/okopf) обрабатываются отдельно.
+_SCALAR_FIELDS = (
+    "query",
+    "date_begin",
+    "date_end",
+    "capital_from",
+    "capital_to",
+    "sshr_from",
+    "sshr_to",
+    "finance_revenue_from",
+    "finance_revenue_to",
+    "finance_profit_from",
+    "finance_profit_to",
+    "finance_value_from",
+    "finance_value_to",
+    "gz_supplier_cnt_from",
+    "gz_supplier_cnt_to",
+    "gz_all_sum_from",
+    "gz_all_sum_to",
+    "arbitr_claim_sum_from",
+    "arbitr_claim_sum_to",
+)
+
+_BOOL_FIELDS = (
+    ("okved_strict", "on"),
+    ("has_phones", "1"),
+    ("has_emails", "1"),
+    ("has_sites", "1"),
+    ("finance_has_actual_year_data", "1"),
+    ("not_defendant", "1"),
+)
+
+
 def build_search_url(filters: SearchFilters) -> str:
-    """Формирует URL расширенного поиска Rusprofile по фильтрам."""
-    params = {}
+    """Формирует URL расширенного поиска Rusprofile.
 
-    if filters.query:
-        params["query"] = filters.query
-    if filters.region:
-        params["region"] = filters.region
-    if filters.okved:
-        params["okved"] = filters.okved
-    if filters.revenue_from:
-        params["revenue_from"] = str(filters.revenue_from)
-    if filters.revenue_to:
-        params["revenue_to"] = str(filters.revenue_to)
-    if filters.profit_from:
-        params["profit_from"] = str(filters.profit_from)
-    if filters.profit_to:
-        params["profit_to"] = str(filters.profit_to)
-    if filters.org_type:
-        params["org_type"] = filters.org_type
-    if filters.status:
-        params["status"] = filters.status
-    if filters.has_phone:
-        params["has_phone"] = "1"
-    if filters.has_site:
-        params["has_site"] = "1"
-    if filters.has_email:
-        params["has_email"] = "1"
-    if filters.business_size:
-        params["business_size"] = filters.business_size
+    Собирает только те параметры, значение которых явно задано: Rusprofile
+    сам по умолчанию возвращает пустые параметры в URL, но нам это не нужно
+    (короче, проще логи).
+    """
+    params: list[tuple[str, str]] = []
+
+    for name in _SCALAR_FIELDS:
+        value = getattr(filters, name)
+        if value in (None, ""):
+            continue
+        params.append((name, str(value)))
+
+    for name, on_value in _BOOL_FIELDS:
+        if getattr(filters, name):
+            params.append((name, on_value))
+
+    # Виджеты — отправляем как массивы (name[]=v).
+    # Точное имя ключа на Rusprofile пока под вопросом (см. TODO у полей),
+    # но urlencode со списком рендерит их в формате, который принимает
+    # большинство серверов (Rusprofile в том числе — проверено частично).
+    for name, values in (
+        ("state", filters.status),
+        ("okved", filters.okved),
+        ("region", filters.region),
+        ("msp", filters.msp),
+        ("okopf", filters.okopf),
+    ):
+        for v in values:
+            if v:
+                params.append((f"{name}[]", str(v)))
+
     if filters.page > 1:
-        params["page"] = str(filters.page)
+        params.append(("page", str(filters.page)))
 
-    url = f"{RUSPROFILE_BASE_URL}/search?{urlencode(params)}"
-    return url
+    query = urlencode(params, doseq=True)
+    # Если только текстовый поиск — используем короткий /search,
+    # иначе /search-advanced (так делает сам сайт).
+    only_query_or_page = all(
+        p[0] in ("query", "page") for p in params
+    )
+    path = "/search" if only_query_or_page else "/search-advanced"
+    return f"{RUSPROFILE_BASE_URL}{path}?{query}" if query else f"{RUSPROFILE_BASE_URL}{path}"

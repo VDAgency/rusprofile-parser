@@ -3,7 +3,8 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-// Регионы РФ
+// Регионы РФ (код → название).
+// Коды берутся с поля Rusprofile — совпадают с кодами ОКАТО первых двух цифр.
 const REGIONS = {
     "77": "Москва",
     "78": "Санкт-Петербург",
@@ -89,13 +90,14 @@ const REGIONS = {
     "13": "Республика Мордовия",
     "18": "Удмуртская Республика",
     "21": "Чувашская Республика",
-    "45": "Курганская область"
+    "45": "Курганская область",
 };
 
-// Заполняем выпадающий список регионов
 function populateRegions() {
     const select = document.getElementById('region');
-    const sorted = Object.entries(REGIONS).sort((a, b) => a[1].localeCompare(b[1], 'ru'));
+    const sorted = Object.entries(REGIONS).sort((a, b) =>
+        a[1].localeCompare(b[1], 'ru')
+    );
     sorted.forEach(([code, name]) => {
         const option = document.createElement('option');
         option.value = code;
@@ -104,46 +106,94 @@ function populateRegions() {
     });
 }
 
-// Собираем данные формы
+// Значения всех чекбоксов с одним именем собираем в массив.
+function collectCheckboxGroup(name) {
+    return Array.from(
+        document.querySelectorAll(`input[type=checkbox][name="${name}"]:checked`)
+    ).map(el => el.value);
+}
+
+// Вспомогалка: строка → null, если пусто.
+function val(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const v = (el.value || '').trim();
+    return v === '' ? null : v;
+}
+
+function checked(id) {
+    const el = document.getElementById(id);
+    return !!(el && el.checked);
+}
+
+// ОКВЭД — пользователь может ввести несколько кодов через запятую.
+function parseOkved(raw) {
+    if (!raw) return [];
+    return raw.split(',')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+}
+
 function getFormData() {
+    const region = val('region');
     return {
-        region: document.getElementById('region').value || null,
-        okved: document.getElementById('okved').value || null,
-        revenue_from: document.getElementById('revenue_from').value || null,
-        revenue_to: document.getElementById('revenue_to').value || null,
-        org_type: document.getElementById('org_type').value || null,
-        business_size: document.getElementById('business_size').value || null,
-        has_phone: document.getElementById('has_phone').checked,
-        has_site: document.getElementById('has_site').checked,
-        has_email: document.getElementById('has_email').checked
+        query: val('query'),
+        region: region ? [region] : [],
+        okved: parseOkved(val('okved')),
+        status: collectCheckboxGroup('status'),
+        okopf: collectCheckboxGroup('okopf'),
+        msp: collectCheckboxGroup('msp'),
+        finance_revenue_from: val('finance_revenue_from'),
+        finance_revenue_to: val('finance_revenue_to'),
+        finance_profit_from: val('finance_profit_from'),
+        finance_profit_to: val('finance_profit_to'),
+        sshr_from: val('sshr_from'),
+        sshr_to: val('sshr_to'),
+        capital_from: val('capital_from'),
+        capital_to: val('capital_to'),
+        has_phones: checked('has_phones'),
+        has_sites: checked('has_sites'),
+        has_emails: checked('has_emails'),
+        finance_has_actual_year_data: checked('finance_has_actual_year_data'),
+        not_defendant: checked('not_defendant'),
     };
 }
 
-// Отправка данных в Telegram-бот
+function hasAnyFilter(data) {
+    if (data.query) return true;
+    for (const k of ['region', 'okved', 'okopf', 'msp']) {
+        if (data[k] && data[k].length) return true;
+    }
+    for (const k of [
+        'finance_revenue_from', 'finance_revenue_to',
+        'finance_profit_from', 'finance_profit_to',
+        'sshr_from', 'sshr_to',
+        'capital_from', 'capital_to',
+    ]) {
+        if (data[k]) return true;
+    }
+    for (const k of [
+        'has_phones', 'has_sites', 'has_emails',
+        'finance_has_actual_year_data', 'not_defendant',
+    ]) {
+        if (data[k]) return true;
+    }
+    return false;
+}
+
 function submitForm(e) {
     e.preventDefault();
-
     const data = getFormData();
 
-    // Проверяем что хоть один фильтр выбран
-    const hasFilter = data.region || data.okved || data.revenue_from ||
-                      data.revenue_to || data.org_type || data.business_size ||
-                      data.has_phone || data.has_site || data.has_email;
-
-    if (!hasFilter) {
-        tg.showAlert('Выберите хотя бы один фильтр для поиска');
+    if (!hasAnyFilter(data)) {
+        tg.showAlert('Выберите хотя бы один фильтр или введите текст запроса.');
         return;
     }
-
-    // Отправляем данные боту
     tg.sendData(JSON.stringify(data));
 }
 
-// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
     populateRegions();
     document.getElementById('searchForm').addEventListener('submit', submitForm);
-
-    // Тема Telegram
     document.body.style.backgroundColor = tg.themeParams.bg_color || '#ffffff';
 });

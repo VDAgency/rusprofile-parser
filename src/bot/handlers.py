@@ -163,15 +163,25 @@ async def handle_webapp_data(message: Message):
             return
 
         filters = SearchFilters(
-            region=data.get("region"),
-            okved=data.get("okved"),
-            revenue_from=_parse_int(data.get("revenue_from")),
-            revenue_to=_parse_int(data.get("revenue_to")),
-            org_type=data.get("org_type"),
-            has_phone=data.get("has_phone", False),
-            has_site=data.get("has_site", False),
-            has_email=data.get("has_email", False),
-            business_size=data.get("business_size"),
+            query=data.get("query") or None,
+            region=_as_list(data.get("region")),
+            okved=_as_list(data.get("okved")),
+            okopf=_as_list(data.get("okopf")),
+            msp=_as_list(data.get("msp")),
+            status=_as_list(data.get("status")) or ["1"],  # по умолчанию «Действующая»
+            finance_revenue_from=_parse_int(data.get("finance_revenue_from")),
+            finance_revenue_to=_parse_int(data.get("finance_revenue_to")),
+            finance_profit_from=_parse_int(data.get("finance_profit_from")),
+            finance_profit_to=_parse_int(data.get("finance_profit_to")),
+            capital_from=_parse_int(data.get("capital_from")),
+            capital_to=_parse_int(data.get("capital_to")),
+            sshr_from=_parse_int(data.get("sshr_from")),
+            sshr_to=_parse_int(data.get("sshr_to")),
+            has_phones=bool(data.get("has_phones")),
+            has_emails=bool(data.get("has_emails")),
+            has_sites=bool(data.get("has_sites")),
+            finance_has_actual_year_data=bool(data.get("finance_has_actual_year_data")),
+            not_defendant=bool(data.get("not_defendant")),
         )
 
         await message.answer("Запускаю парсинг с заданными фильтрами...")
@@ -246,3 +256,16 @@ def _parse_int(value) -> int | None:
         return int(value)
     except (ValueError, TypeError):
         return None
+
+
+def _as_list(value) -> list[str]:
+    """Нормализует значение от Mini App в список строк.
+
+    Mini App может прислать None, одиночное значение или массив —
+    внутренне мы всегда работаем со списком (поля-виджеты Rusprofile).
+    """
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value if v not in (None, "")]
+    return [str(value)]
