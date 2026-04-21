@@ -26,7 +26,7 @@ async def main():
                 except Exception:
                     await page.wait_for_timeout(3000)
 
-            await page.wait_for_selector("#region-63", timeout=30000)
+            await page.wait_for_selector("#region-63", state="attached", timeout=30000)
             await page.wait_for_timeout(2000)
 
             # DOM-предки #region-63: tag, id, class, стиль display/visibility
