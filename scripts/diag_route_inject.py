@@ -40,20 +40,28 @@ def describe(tag: str, sent_body: str | None, raw_resp: str | None):
     except Exception:
         print(f"  raw[:300]: {raw_resp[:300]}")
         return
-    if "code" in j and "message" in j:
-        print(f"  ERR code={j['code']} msg={j['message'][:200]}")
+    code = j.get("code")
+    if code not in (None, 0):
+        print(f"  ERR code={code} msg={str(j.get('message'))[:200]}")
         return
+    # На верхнем уровне может быть data/payload, а не сразу result
+    data = j.get("data") if isinstance(j.get("data"), dict) else j
     print(
-        f"  ul_count={j.get('ul_count')} ip_count={j.get('ip_count')} "
-        f"total={j.get('total_count')} has_more={j.get('has_more')}"
+        f"  ul_count={data.get('ul_count')} ip_count={data.get('ip_count')} "
+        f"total={data.get('total_count') or data.get('total')} "
+        f"has_more={data.get('has_more')}"
     )
-    res = j.get("result", [])
+    res = data.get("result") or data.get("results") or data.get("items") or []
     print(f"  result: {len(res)} карточек")
     for c in res[:5]:
-        name = (c.get("name") or "")[:38]
-        region = (c.get("region") or "")[:25]
-        address = (c.get("address") or "")[:70]
+        name = (c.get("name") or c.get("company_name") or "")[:38]
+        region = (c.get("region") or c.get("region_name") or "")[:25]
+        address = (c.get("address") or c.get("addr") or "")[:70]
         print(f"    {name:38s} | {region:25s} | {address}")
+    # Если всё ещё пусто — покажем топ-уровневые ключи
+    if not res:
+        print(f"  top-keys: {list(j.keys())[:20]}")
+        print(f"  raw[:500]: {json.dumps(j, ensure_ascii=False)[:500]}")
 
 
 async def run_case(page, overrides: dict, tag: str):
