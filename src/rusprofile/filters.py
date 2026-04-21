@@ -288,6 +288,108 @@ _BOOL_FIELDS = (
 )
 
 
+def filters_to_body(filters: SearchFilters) -> dict:
+    """Формирует JSON-body для POST /ajax_auth.php?action=search_advanced.
+
+    Живой сабмит Vue-формы /search-advanced уходит как ``application/json``.
+    Ключи в body отличаются от URL-параметров — подтверждены диагностикой
+    (см. ``scripts/diag_combos.py`` → ``logs/diag_combos.log``):
+
+    * ``state-N``   → ``"state-N": true``
+    * ОКВЭД        → ``"okved": ["46.9", ...]`` + ``"okved_strict": true``
+    * Регион       → ``"region": ["63", ...]`` (составной «97,77» разбиваем
+      на ``["97", "77"]`` — сервер принимает оба варианта одинаково).
+    * ОКОПФ        → ``"okopf": ["12165", "12300", ...]`` — массив отдельных
+      кодов, а не строка «12165,12300»! Неразделённый вариант возвращает 0.
+    * Query        → ``"query": "текст"``
+    * Пагинация    → ``"page": "N"`` (строкой)
+
+    Ключ ``page`` здесь не добавляем — его выставляет цикл парсера.
+    """
+    body: dict = {}
+
+    if filters.query:
+        body["query"] = filters.query
+
+    # Статусы
+    for code in filters.status:
+        if code:
+            body[f"state-{code}"] = True
+
+    # ОКВЭД + strict
+    okved_codes = [c for c in filters.okved if c]
+    if okved_codes:
+        body["okved"] = okved_codes
+        strict = True if filters.okved_strict is None else filters.okved_strict
+        if strict:
+            body["okved_strict"] = True
+
+    # Регион: разбиваем составные коды на части
+    regions: list[str] = []
+    for code in filters.region:
+        if not code:
+            continue
+        for sub in str(code).split(","):
+            s = sub.strip()
+            if s and s not in regions:
+                regions.append(s)
+    if regions:
+        body["region"] = regions
+
+    # ОКОПФ: составные коды (12165,12300) тоже разбиваем на массив
+    okopf_codes: list[str] = []
+    for code in filters.okopf:
+        if not code:
+            continue
+        for sub in str(code).split(","):
+            s = sub.strip()
+            if s and s not in okopf_codes:
+                okopf_codes.append(s)
+    if okopf_codes:
+        body["okopf"] = okopf_codes
+
+    # МСП — формат неизвестен; передаём по URL-логике ``<value>=<value>``.
+    # Если не сработает — фильтр просто не повлияет на выдачу.
+    for code in filters.msp:
+        if code:
+            body[code] = code
+
+    # Даты
+    if filters.date_begin:
+        body["date_begin"] = filters.date_begin
+    if filters.date_end:
+        body["date_end"] = filters.date_end
+
+    # Контакты и бухотчётность
+    if filters.has_phones:
+        body["has_phones"] = True
+    if filters.has_emails:
+        body["has_emails"] = True
+    if filters.has_sites:
+        body["has_sites"] = True
+    if filters.finance_has_actual_year_data:
+        body["finance_has_actual_year_data"] = True
+    if filters.not_defendant:
+        body["not_defendant"] = True
+
+    # Числовые диапазоны — капитал, численность, финансы, госзакупки, арбитраж
+    for name in (
+        "capital_from", "capital_to",
+        "sshr_from", "sshr_to",
+        "finance_revenue_from", "finance_revenue_to",
+        "finance_profit_from", "finance_profit_to",
+        "finance_value_from", "finance_value_to",
+        "gz_supplier_cnt_from", "gz_supplier_cnt_to",
+        "gz_all_sum_from", "gz_all_sum_to",
+        "arbitr_claim_sum_from", "arbitr_claim_sum_to",
+    ):
+        val = getattr(filters, name, None)
+        if val not in (None, ""):
+            body[name] = val
+
+    return body
+
+
 def build_search_url(filters: SearchFilters) -> str:
     """Формирует URL расширенного поиска Rusprofile.
 
