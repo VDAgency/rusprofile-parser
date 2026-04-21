@@ -59,23 +59,27 @@ def write_companies(companies: list, sheet_name: str = "Результаты") -
     spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
     ws = _get_or_create_worksheet(spreadsheet, sheet_name)
 
-    # Данные для записи
     rows = [c.to_row() for c in companies]
 
     if not rows:
         logger.warning("Нет данных для записи")
         return spreadsheet.url
 
-    # Находим первую пустую строку (после заголовков)
+    # Считаем следующую свободную строку по существующим данным,
+    # и принудительно расширяем сетку — ws.update() не растит лист сам,
+    # а новый лист после clear_sheet может иметь row_count=1.
     existing = ws.get_all_values()
     start_row = len(existing) + 1
+    end_row = start_row + len(rows) - 1
 
-    # Записываем пакетно
-    cell_range = f"A{start_row}:O{start_row + len(rows) - 1}"
-    ws.update(cell_range, rows)
+    if ws.row_count < end_row:
+        ws.add_rows(end_row - ws.row_count)
+
+    cell_range = f"A{start_row}:O{end_row}"
+    ws.update(cell_range, rows, value_input_option="USER_ENTERED")
 
     logger.info("Записано %d компаний в Google Sheets (строки %d–%d)",
-                len(rows), start_row, start_row + len(rows) - 1)
+                len(rows), start_row, end_row)
 
     return spreadsheet.url
 
