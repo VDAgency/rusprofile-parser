@@ -12,7 +12,41 @@
         <h1>Поиск компаний</h1>
         <p class="subtitle">Настройте фильтры и запустите парсинг</p>
 
-        <form id="searchForm">
+        <!-- Переключатель источников -->
+        <div class="source-tabs">
+            <button type="button" class="tab active" data-source="rusprofile">Rusprofile</button>
+            <button type="button" class="tab" data-source="yandex_maps">Яндекс Карты</button>
+        </div>
+
+        <!-- Форма Яндекс Карт -->
+        <form id="yandexForm" class="source-section hidden">
+            <div class="form-group">
+                <label for="yandex_region">Регион</label>
+                <select id="yandex_region" name="yandex_region">
+                    <option value="">Выберите регион</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="yandex_category">Вид деятельности</label>
+                <input type="text" id="yandex_category" name="yandex_category"
+                       placeholder="Напр. стоматологии, кафе, автосервисы">
+                <div class="hint">Свободный текст — как если бы искали в Яндекс Картах вручную.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="yandex_max_places">Лимит карточек</label>
+                <input type="number" id="yandex_max_places" name="yandex_max_places"
+                       placeholder="По умолчанию 300" min="1" max="500">
+                <div class="hint">Больше — дольше парсинг. При ~30 карточках уходит ~2 минуты.</div>
+            </div>
+
+            <button type="submit" class="btn-primary">
+                Запустить парсинг Яндекс Карт
+            </button>
+        </form>
+
+        <form id="searchForm" class="source-section">
 
             <!-- Текстовый запрос -->
             <div class="form-group">

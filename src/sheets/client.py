@@ -25,39 +25,68 @@ def _get_client() -> gspread.Client:
     return gspread.authorize(creds)
 
 
-def _get_or_create_worksheet(spreadsheet: gspread.Spreadsheet, title: str = "Результаты"):
-    """Получает или создаёт лист с заголовками."""
+def _col_letter(n: int) -> str:
+    """Преобразует номер колонки (1-based) в букву A1-нотации: 1→A, 27→AA."""
+    result = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = chr(65 + r) + result
+    return result
+
+
+def _get_or_create_worksheet(
+    spreadsheet: gspread.Spreadsheet,
+    title: str,
+    headers: list[str],
+):
+    """Получает или создаёт лист с заданными заголовками.
+
+    Заголовки — параметр функции: разные листы могут иметь свою структуру
+    (например, «Результаты» — 15 колонок Rusprofile, «Яндекс Карты» — 12 колонок).
+    """
     try:
         ws = spreadsheet.worksheet(title)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=len(SHEET_HEADERS))
+        ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=len(headers))
 
-    # Проверяем заголовки
+    last_col = _col_letter(len(headers))
+
+    # Проверяем заголовки и выставляем при расхождении
     first_row = ws.row_values(1)
-    if first_row != SHEET_HEADERS:
-        ws.update("A1", [SHEET_HEADERS])
-        ws.format("A1:O1", {
+    if first_row != headers:
+        ws.update("A1", [headers])
+        ws.format(f"A1:{last_col}1", {
             "textFormat": {"bold": True},
             "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.95},
         })
-        logger.info("Заголовки таблицы обновлены")
+        logger.info("Заголовки листа '%s' обновлены", title)
 
     return ws
 
 
-def write_companies(companies: list, sheet_name: str = "Результаты") -> str:
-    """Записывает список компаний в Google Sheets.
+def write_companies(
+    companies: list,
+    sheet_name: str = "Результаты",
+    headers: list[str] | None = None,
+) -> str:
+    """Записывает список объектов в Google Sheets.
 
     Args:
-        companies: список объектов Company
-        sheet_name: название листа
+        companies: список объектов с методом ``.to_row() -> list[str]``.
+        sheet_name: название листа.
+        headers: заголовки столбцов; по умолчанию — ``SHEET_HEADERS``
+            (формат Rusprofile). Для листа «Яндекс Карты» передаётся
+            ``YANDEX_SHEET_HEADERS``.
 
     Returns:
-        URL таблицы
+        URL таблицы.
     """
+    if headers is None:
+        headers = SHEET_HEADERS
+
     client = _get_client()
     spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
-    ws = _get_or_create_worksheet(spreadsheet, sheet_name)
+    ws = _get_or_create_worksheet(spreadsheet, sheet_name, headers)
 
     rows = [c.to_row() for c in companies]
 
@@ -75,11 +104,12 @@ def write_companies(companies: list, sheet_name: str = "Результаты") -
     if ws.row_count < end_row:
         ws.add_rows(end_row - ws.row_count)
 
-    cell_range = f"A{start_row}:O{end_row}"
+    last_col = _col_letter(len(headers))
+    cell_range = f"A{start_row}:{last_col}{end_row}"
     ws.update(cell_range, rows, value_input_option="USER_ENTERED")
 
-    logger.info("Записано %d компаний в Google Sheets (строки %d–%d)",
-                len(rows), start_row, end_row)
+    logger.info("Записано %d строк в лист '%s' (строки %d–%d)",
+                len(rows), sheet_name, start_row, end_row)
 
     return spreadsheet.url
 

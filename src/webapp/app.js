@@ -110,6 +110,44 @@ function populateRegions() {
     });
 }
 
+// Для Яндекс Карт используем тот же справочник, но value — название региона
+// (Яндексу передаём текст поискового запроса, код ему не нужен).
+function populateYandexRegions() {
+    const select = document.getElementById('yandex_region');
+    if (!select) return;
+    const names = Object.values(REGIONS).sort((a, b) => a.localeCompare(b, 'ru'));
+    names.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+    });
+}
+
+// Переключение табов «Rusprofile / Яндекс Карты».
+function setupTabs() {
+    const tabs = document.querySelectorAll('.source-tabs .tab');
+    const sections = {
+        rusprofile: document.getElementById('searchForm'),
+        yandex_maps: document.getElementById('yandexForm'),
+    };
+    tabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
+            tabs.forEach((t) => t.classList.remove('active'));
+            tab.classList.add('active');
+            const source = tab.dataset.source;
+            Object.entries(sections).forEach(([key, el]) => {
+                if (!el) return;
+                if (key === source) {
+                    el.classList.remove('hidden');
+                } else {
+                    el.classList.add('hidden');
+                }
+            });
+        });
+    });
+}
+
 // Значения всех чекбоксов с одним именем собираем в массив.
 function collectCheckboxGroup(name) {
     return Array.from(
@@ -193,11 +231,41 @@ function submitForm(e) {
         tg.showAlert('Выберите хотя бы один фильтр или введите текст запроса.');
         return;
     }
+    data.source = 'rusprofile';
     tg.sendData(JSON.stringify(data));
+}
+
+function submitYandexForm(e) {
+    e.preventDefault();
+    const region = val('yandex_region');
+    const category = val('yandex_category');
+    const maxPlaces = val('yandex_max_places');
+
+    if (!region) {
+        tg.showAlert('Выберите регион.');
+        return;
+    }
+    if (!category) {
+        tg.showAlert('Укажите вид деятельности (например: стоматологии, кафе).');
+        return;
+    }
+
+    const payload = {
+        source: 'yandex_maps',
+        region: region,
+        category: category,
+    };
+    if (maxPlaces) payload.max_places = maxPlaces;
+
+    tg.sendData(JSON.stringify(payload));
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     populateRegions();
+    populateYandexRegions();
+    setupTabs();
     document.getElementById('searchForm').addEventListener('submit', submitForm);
+    const yandexForm = document.getElementById('yandexForm');
+    if (yandexForm) yandexForm.addEventListener('submit', submitYandexForm);
     document.body.style.backgroundColor = tg.themeParams.bg_color || '#ffffff';
 });

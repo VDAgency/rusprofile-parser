@@ -14,11 +14,18 @@ from aiogram.types import (
 from aiogram.filters import CommandStart, Command
 from playwright.async_api import async_playwright
 
-from src.config import TELEGRAM_WEBAPP_URL, GOOGLE_SHEET_ID
+from src.config import (
+    TELEGRAM_WEBAPP_URL,
+    GOOGLE_SHEET_ID,
+    YANDEX_SHEET_HEADERS,
+    YANDEX_SHEET_NAME,
+    YANDEX_MAX_PLACES,
+)
 from src.rusprofile.auth import get_authenticated_context
 from src.rusprofile.parser import parse_search_results, enrich_company_details, Company
 from src.rusprofile.filters import SearchFilters
 from src.sheets.client import write_companies, get_sheet_url
+from src.yandex_maps.runner import parse_yandex
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -150,7 +157,11 @@ async def cmd_search(message: Message):
 
 @router.message(F.web_app_data)
 async def handle_webapp_data(message: Message):
-    """Обработка данных из Mini App."""
+    """Обработка данных из Mini App.
+
+    Mini App отправляет поле ``source`` со значением ``"rusprofile"`` или
+    ``"yandex_maps"``. По нему диспатчим в соответствующий парсер.
+    """
     try:
         data = json.loads(message.web_app_data.data)
         logger.info("Получены данные из Mini App: %s", data)
@@ -160,6 +171,27 @@ async def handle_webapp_data(message: Message):
             await message.answer(
                 "У вас уже выполняется парсинг. Дождитесь завершения или /stop."
             )
+            return
+
+        source = data.get("source", "rusprofile")
+
+        if source == "yandex_maps":
+            region = (data.get("region") or "").strip()
+            category = (data.get("category") or "").strip()
+            if not region or not category:
+                await message.answer(
+                    "Для парсинга Яндекс Карт укажите и регион, и вид деятельности."
+                )
+                return
+            max_places = _parse_int(data.get("max_places")) or YANDEX_MAX_PLACES
+
+            await message.answer(
+                f"Ищу «{category}» в регионе «{region}» на Яндекс Картах..."
+            )
+            task = asyncio.create_task(
+                _run_yandex_parsing(message, region, category, max_places)
+            )
+            _active_tasks[user_id] = task
             return
 
         filters = SearchFilters(
@@ -243,6 +275,65 @@ async def _run_parsing(message: Message, filters: SearchFilters):
     except Exception as e:
         logger.error("Ошибка парсинга: %s", e)
         await status_msg.edit_text(f"Ошибка парсинга: {e}")
+    finally:
+        user_id = message.from_user.id
+        _active_tasks.pop(user_id, None)
+
+
+async def _run_yandex_parsing(
+    message: Message,
+    region: str,
+    category: str,
+    max_places: int,
+):
+    """Запускает парсинг Яндекс Карт и выгружает результат в Google Sheets."""
+    status_msg = await message.answer("Подключаюсь к Яндекс Картам...")
+
+    try:
+        async def on_progress(total: int, processed: int):
+            try:
+                await status_msg.edit_text(
+                    f"Яндекс Карты: найдено {total}, обработано {processed}..."
+                )
+            except Exception:
+                pass  # Telegram ограничивает частоту edit_text
+
+        await status_msg.edit_text(
+            f"Ищу «{category}» в «{region}» на Яндекс Картах..."
+        )
+        places = await parse_yandex(
+            region=region,
+            category=category,
+            max_places=max_places,
+            progress_callback=on_progress,
+            with_details=True,
+        )
+
+        if not places:
+            await status_msg.edit_text(
+                "Ничего не найдено. Проверьте регион и рубрику или попробуйте позже."
+            )
+            return
+
+        await status_msg.edit_text(
+            f"Найдено {len(places)} организаций. Выгружаю в Google Sheets..."
+        )
+        sheet_url = write_companies(
+            places,
+            sheet_name=YANDEX_SHEET_NAME,
+            headers=YANDEX_SHEET_HEADERS,
+        )
+
+        await status_msg.edit_text(
+            f"Готово! Яндекс Карты — {len(places)} организаций.\n\n"
+            f"Лист «{YANDEX_SHEET_NAME}»:\n{sheet_url}"
+        )
+
+    except asyncio.CancelledError:
+        await status_msg.edit_text("Парсинг отменён.")
+    except Exception as e:
+        logger.error("Ошибка парсинга Яндекс Карт: %s", e)
+        await status_msg.edit_text(f"Ошибка: {e}")
     finally:
         user_id = message.from_user.id
         _active_tasks.pop(user_id, None)

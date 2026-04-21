@@ -58,3 +58,28 @@ SHEET_HEADERS = [
     "Комментарий ИИ",
     "Дата парсинга",
 ]
+
+# --- Яндекс Карты -----------------------------------------------------------
+YANDEX_MAPS_BASE_URL = "https://yandex.ru/maps/"
+YANDEX_SHEET_NAME = "Яндекс Карты"
+YANDEX_SHEET_HEADERS = [
+    "Название",
+    "Рубрики",
+    "Регион",
+    "Адрес",
+    "Телефон",
+    "Сайт",
+    "Рейтинг",
+    "Отзывов",
+    "Режим работы",
+    "Координаты",
+    "Ссылка Яндекс",
+    "Дата парсинга",
+]
+# Верхний лимит карточек за один запуск (защита от бесконечного скролла)
+YANDEX_MAX_PLACES = 300
+
+# Прокси для Яндекс-парсера (опционально; пустые — парсим напрямую)
+PROXY_SERVER = os.getenv("PROXY_SERVER", "")       # напр. http://proxy.example.com:8000
+PROXY_USERNAME = os.getenv("PROXY_USERNAME", "")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD", "")

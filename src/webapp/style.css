@@ -26,7 +26,40 @@ h1 {
 .subtitle {
     font-size: 14px;
     color: var(--tg-theme-hint-color, #999999);
-    margin-bottom: 24px;
+    margin-bottom: 16px;
+}
+
+/* Переключатель источников */
+.source-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 4px;
+    background-color: var(--tg-theme-secondary-bg-color, #f0f0f0);
+    border-radius: 12px;
+    margin-bottom: 20px;
+}
+
+.source-tabs .tab {
+    flex: 1;
+    padding: 10px 12px;
+    border: none;
+    border-radius: 8px;
+    background-color: transparent;
+    color: var(--tg-theme-hint-color, #777);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.source-tabs .tab.active {
+    background-color: var(--tg-theme-bg-color, #ffffff);
+    color: var(--tg-theme-text-color, #1a1a1a);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.source-section.hidden {
+    display: none;
 }
 
 .form-group {
