@@ -56,9 +56,9 @@ async def fetch_via_page(page, body: dict) -> dict:
 def describe_result(tag: str, r: dict):
     print(f"\n--- {tag} ---")
     print(f"  status={r['status']} size={r['size']}")
+    print(f"  preview: {r.get('preview','')[:300]}")
     j = r.get("json")
     if not j:
-        print(f"  preview: {r.get('preview','')}")
         return
     print(f"  ul_count={j.get('ul_count')} ip_count={j.get('ip_count')} "
           f"total_count={j.get('total_count')} has_more={j.get('has_more')}")
