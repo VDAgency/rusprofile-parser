@@ -63,12 +63,37 @@
                 </select>
             </div>
 
-            <!-- ОКВЭД -->
-            <div class="form-group">
-                <label for="okved">ОКВЭД (код)</label>
-                <input type="text" id="okved" name="okved"
-                       placeholder="Напр. 46.90 — можно несколько через запятую">
-                <div class="hint">Поддерживается несколько кодов через запятую.</div>
+            <!-- ОКВЭД — поиск по справочнику с автодополнением -->
+            <div class="form-group" id="okvedGroup">
+                <label for="okvedSearch">Виды деятельности (ОКВЭД)</label>
+                <input type="text" id="okvedSearch"
+                       placeholder="Например: канцтовары, реклама, автосалоны">
+                <div class="hint">Введите простыми словами, что ищете — справочник подберёт коды ОКВЭД.</div>
+
+                <!-- Выпадающие подсказки (рендерятся в JS) -->
+                <div class="okved-suggest" id="okvedSuggest"></div>
+
+                <!-- Выбранные коды -->
+                <div class="okved-chips" id="okvedChips"></div>
+
+                <!-- Доп. опции по ОКВЭД -->
+                <div class="okved-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="okved_loose">
+                        <span>Искать также по дополнительным ОКВЭД</span>
+                    </label>
+                    <button type="button" class="btn-secondary" id="presetsBtn">
+                        Целевые ОКВЭД
+                    </button>
+                </div>
+
+                <!-- Список пресетов (раскрывается по кнопке) -->
+                <div class="okved-presets hidden" id="presetsPanel"></div>
+
+                <!-- Подсказка-ошибка валидации -->
+                <div class="okved-error hidden" id="okvedError">
+                    Выберите ОКВЭД из справочника или добавьте другие фильтры.
+                </div>
             </div>
 
             <!-- Статус -->

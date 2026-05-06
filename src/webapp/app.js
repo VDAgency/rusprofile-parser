@@ -3,13 +3,10 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-// Регионы РФ (код → название).
-// Коды подтверждены сабмитом формы /search-advanced (см.
-// scripts/diag_filters_final.py → logs/diag_filters_final.log).
-// Большинство совпадают с ОКАТО, но для ряда субъектов Rusprofile
-// использует *составной* код «старая,новая классификация».
+// Регионы РФ (код → название). Коды подтверждены сабмитом формы
+// /search-advanced (см. scripts/diag_filters_final.py).
 const REGIONS = {
-    "97,77": "Москва",              // составной: 97 (ТиНАО) + 77
+    "97,77": "Москва",
     "78": "Санкт-Петербург",
     "50": "Московская область",
     "47": "Ленинградская область",
@@ -22,7 +19,7 @@ const REGIONS = {
     "74": "Челябинская область",
     "54": "Новосибирская область",
     "02": "Республика Башкортостан",
-    "81,59": "Пермский край",       // составной: 81 (Коми-Пермяцкий АО) + 59
+    "81,59": "Пермский край",
     "36": "Воронежская область",
     "34": "Волгоградская область",
     "38": "Иркутская область",
@@ -72,7 +69,7 @@ const REGIONS = {
     "22": "Алтайский край",
     "04": "Республика Алтай",
     "03": "Республика Бурятия",
-    "75,80": "Забайкальский край",  // составной: 75 + 80 (Агинский Бурятский АО)
+    "75,80": "Забайкальский край",
     "70": "Томская область",
     "42": "Кемеровская область",
     "19": "Республика Хакасия",
@@ -81,7 +78,7 @@ const REGIONS = {
     "25": "Приморский край",
     "27": "Хабаровский край",
     "28": "Амурская область",
-    "41,82": "Камчатский край",     // составной: 41 + 82 (Корякский АО)
+    "41,82": "Камчатский край",
     "49": "Магаданская область",
     "65": "Сахалинская область",
     "79": "Еврейская автономная область",
@@ -110,8 +107,6 @@ function populateRegions() {
     });
 }
 
-// Для Яндекс Карт используем тот же справочник, но value — название региона
-// (Яндексу передаём текст поискового запроса, код ему не нужен).
 function populateYandexRegions() {
     const select = document.getElementById('yandex_region');
     if (!select) return;
@@ -124,7 +119,6 @@ function populateYandexRegions() {
     });
 }
 
-// Переключение табов «Rusprofile / Яндекс Карты».
 function setupTabs() {
     const tabs = document.querySelectorAll('.source-tabs .tab');
     const sections = {
@@ -148,14 +142,12 @@ function setupTabs() {
     });
 }
 
-// Значения всех чекбоксов с одним именем собираем в массив.
 function collectCheckboxGroup(name) {
     return Array.from(
         document.querySelectorAll(`input[type=checkbox][name="${name}"]:checked`)
     ).map(el => el.value);
 }
 
-// Вспомогалка: строка → null, если пусто.
 function val(id) {
     const el = document.getElementById(id);
     if (!el) return null;
@@ -168,20 +160,382 @@ function checked(id) {
     return !!(el && el.checked);
 }
 
-// ОКВЭД — пользователь может ввести несколько кодов через запятую.
-function parseOkved(raw) {
-    if (!raw) return [];
-    return raw.split(',')
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
+// =====================================================================
+// ОКВЭД: справочник, поиск, chips, пресеты
+// =====================================================================
+
+const OKVED = {
+    items: [],
+    byCode: new Map(),
+    childrenOf: new Map(),     // code -> [child codes]
+    presets: [],
+    selected: new Set(),       // выбранные коды
+};
+
+async function loadOkvedHandbook() {
+    const [handbookResp, targetsResp] = await Promise.all([
+        fetch('okved.json', { cache: 'no-cache' }),
+        fetch('okved_targets.json', { cache: 'no-cache' }),
+    ]);
+    if (!handbookResp.ok) throw new Error('okved.json не найден');
+    if (!targetsResp.ok) throw new Error('okved_targets.json не найден');
+
+    const handbook = await handbookResp.json();
+    const targets = await targetsResp.json();
+
+    OKVED.items = handbook.items || [];
+    OKVED.byCode = new Map(OKVED.items.map(it => [it.code, it]));
+
+    // Индекс детей: code → массив дочерних кодов.
+    OKVED.childrenOf = new Map();
+    for (const it of OKVED.items) {
+        if (!it.parent) continue;
+        if (!OKVED.childrenOf.has(it.parent)) OKVED.childrenOf.set(it.parent, []);
+        OKVED.childrenOf.get(it.parent).push(it.code);
+    }
+
+    OKVED.presets = targets.presets || [];
+
+    console.log(`ОКВЭД: загружено ${OKVED.items.length} записей, ${OKVED.presets.length} пресетов`);
 }
+
+const TOKEN_RE = /[\wа-яёА-ЯЁ\-./]+/gu;
+
+function tokenize(text) {
+    if (!text) return [];
+    return (text.match(TOKEN_RE) || []).map(t => t.toLowerCase());
+}
+
+function commonPrefixLen(a, b) {
+    const n = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < n && a[i] === b[i]) i++;
+    return i;
+}
+
+function scoreItem(item, queryTokens, rawQuery) {
+    if (!queryTokens.length) return 0;
+
+    const name = (item.name || '').toLowerCase();
+    const description = (item.description || '').toLowerCase();
+    const code = (item.code || '').toLowerCase();
+    const keywords = (item.keywords || []).map(k => String(k).toLowerCase());
+    const keywordWords = new Set();
+    for (const kw of keywords) for (const w of kw.split(/\s+/)) keywordWords.add(w);
+
+    let score = 0;
+
+    const raw = rawQuery.trim().toLowerCase();
+    if (raw && raw.length >= 3) {
+        if (keywords.some(kw => kw === raw)) score += 12;
+        else if (keywords.some(kw => kw.includes(raw))) score += 4;
+    }
+
+    for (const token of queryTokens) {
+        if (!token || token.length < 2) continue;
+
+        if (code === token) {
+            score += 15;
+            continue;
+        }
+        if (code && code.startsWith(token + '.')) score += 4;
+
+        if (keywords.some(kw => kw === token)) {
+            score += 10;
+        } else if (keywordWords.has(token)) {
+            score += 5;
+        } else if (token.length >= 4) {
+            const threshold = Math.max(4, token.length - 2);
+            for (const w of keywordWords) {
+                if (w.length < threshold) continue;
+                if (commonPrefixLen(token, w) >= threshold) {
+                    score += 3;
+                    break;
+                }
+            }
+        }
+
+        if (description.includes(token)) score += 2;
+        if (name.includes(token)) score += 1;
+    }
+
+    if (score <= 0) return 0;
+
+    if (item.is_leaf) score += 2;
+    const level = Number(item.level) || 0;
+    if (level >= 5) score += 1;
+    else if (level === 4) score += 0.5;
+
+    return score;
+}
+
+function searchOkved(query, limit = 12) {
+    const q = (query || '').trim();
+    if (!q) return [];
+    const tokens = tokenize(q);
+    if (!tokens.length) return [];
+
+    const scored = [];
+    for (const item of OKVED.items) {
+        // По ТЗ: разрешаем выбирать только уровни 2–6 (классы и ниже).
+        if ((item.level || 0) < 2) continue;
+        const s = scoreItem(item, tokens, q);
+        if (s > 0) scored.push([s, item]);
+    }
+    scored.sort((a, b) => b[0] - a[0] || (a[1].code || '').localeCompare(b[1].code || ''));
+    return scored.slice(0, limit).map(([, it]) => it);
+}
+
+function expandChildren(code) {
+    const result = [];
+    if (!OKVED.byCode.has(code)) return result;
+    result.push(code);
+    const queue = [code];
+    const seen = new Set([code]);
+    while (queue.length) {
+        const cur = queue.shift();
+        const ch = OKVED.childrenOf.get(cur) || [];
+        for (const c of ch) {
+            if (!seen.has(c)) {
+                seen.add(c);
+                result.push(c);
+                queue.push(c);
+            }
+        }
+    }
+    return result;
+}
+
+function addOkvedCode(code, withChildren = false) {
+    if (!code || !OKVED.byCode.has(code)) return;
+    if (withChildren) {
+        for (const c of expandChildren(code)) {
+            const item = OKVED.byCode.get(c);
+            // Пропускаем разделы уровня 1 — они не валидны для поиска.
+            if (item && (item.level || 0) >= 2) OKVED.selected.add(c);
+        }
+    } else {
+        OKVED.selected.add(code);
+    }
+    renderChips();
+    rerenderSuggest();
+    updateValidation();
+}
+
+function removeOkvedCode(code) {
+    OKVED.selected.delete(code);
+    renderChips();
+    rerenderSuggest();
+    updateValidation();
+}
+
+function renderChips() {
+    const container = document.getElementById('okvedChips');
+    if (!container) return;
+    container.innerHTML = '';
+    for (const code of OKVED.selected) {
+        const item = OKVED.byCode.get(code);
+        if (!item) continue;
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.title = item.name || '';
+        chip.innerHTML = `
+            <span class="chip-code">${code}</span>
+            <span class="chip-name">${escapeHtml(shortName(item.name))}</span>
+            <span class="chip-remove" data-code="${code}">×</span>
+        `;
+        chip.querySelector('.chip-remove').addEventListener('click', (e) => {
+            e.stopPropagation();
+            removeOkvedCode(code);
+        });
+        container.appendChild(chip);
+    }
+}
+
+function shortName(name) {
+    if (!name) return '';
+    return name.length > 50 ? name.slice(0, 50) + '…' : name;
+}
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function renderSuggest(items) {
+    const container = document.getElementById('okvedSuggest');
+    if (!container) return;
+    container.innerHTML = '';
+    for (const item of items) {
+        const isSelected = OKVED.selected.has(item.code);
+        const hasChildren = (OKVED.childrenOf.get(item.code) || []).length > 0;
+
+        const div = document.createElement('div');
+        div.className = 'suggest-item' + (isSelected ? ' selected' : '');
+        div.innerHTML = `
+            <div>
+                <span class="suggest-code">${item.code}</span>
+                <span class="suggest-name">${escapeHtml(item.name || '')}</span>
+            </div>
+            ${item.description ? `<div class="suggest-desc">${escapeHtml(item.description)}</div>` : ''}
+            ${hasChildren && !isSelected ? `<button type="button" class="suggest-add-children" data-code="${item.code}">+ с подгруппами</button>` : ''}
+        `;
+        if (!isSelected) {
+            div.addEventListener('click', (e) => {
+                if (e.target.classList.contains('suggest-add-children')) {
+                    e.stopPropagation();
+                    addOkvedCode(item.code, true);
+                } else {
+                    addOkvedCode(item.code, false);
+                }
+            });
+        }
+        container.appendChild(div);
+    }
+}
+
+function rerenderSuggest() {
+    const search = document.getElementById('okvedSearch');
+    if (!search) return;
+    const q = (search.value || '').trim();
+    if (!q) {
+        document.getElementById('okvedSuggest').innerHTML = '';
+        return;
+    }
+    renderSuggest(searchOkved(q, 12));
+}
+
+function setupOkvedSearch() {
+    const input = document.getElementById('okvedSearch');
+    if (!input) return;
+    let timer = null;
+    input.addEventListener('input', () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => rerenderSuggest(), 150);
+    });
+}
+
+// ----- Пресеты -----------------------------------------------------------
+
+function applyPreset(preset) {
+    if (!preset) return;
+    OKVED.selected.clear();
+    for (const code of (preset.codes || [])) {
+        if (OKVED.byCode.has(code)) OKVED.selected.add(code);
+    }
+    const rec = preset.recommended_filters || {};
+
+    const setCheck = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!value;
+    };
+    const setVal = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = String(value);
+    };
+
+    if ('has_phones' in rec) setCheck('has_phones', rec.has_phones);
+    if ('has_emails' in rec) setCheck('has_emails', rec.has_emails);
+    if ('has_sites' in rec) setCheck('has_sites', rec.has_sites);
+    if ('finance_has_actual_year_data' in rec) setCheck('finance_has_actual_year_data', rec.finance_has_actual_year_data);
+    if ('not_defendant' in rec) setCheck('not_defendant', rec.not_defendant);
+    if ('finance_revenue_from' in rec) setVal('finance_revenue_from', rec.finance_revenue_from);
+    if ('finance_revenue_to' in rec) setVal('finance_revenue_to', rec.finance_revenue_to);
+
+    // МСП — это группа чекбоксов с name="msp"
+    if (Array.isArray(rec.msp)) {
+        const wanted = new Set(rec.msp);
+        document.querySelectorAll('input[type=checkbox][name="msp"]').forEach(el => {
+            el.checked = wanted.has(el.value);
+        });
+    }
+
+    renderChips();
+    rerenderSuggest();
+    updateValidation();
+    document.getElementById('presetsPanel').classList.add('hidden');
+
+    if (typeof tg.HapticFeedback !== 'undefined' && tg.HapticFeedback.notificationOccurred) {
+        tg.HapticFeedback.notificationOccurred('success');
+    }
+}
+
+function renderPresetsPanel() {
+    const panel = document.getElementById('presetsPanel');
+    if (!panel) return;
+    panel.innerHTML = '';
+    for (const preset of OKVED.presets) {
+        const div = document.createElement('div');
+        div.className = 'preset-item';
+        div.innerHTML = `
+            <div class="preset-title">${escapeHtml(preset.title || preset.id)}</div>
+            <div class="preset-desc">${escapeHtml(preset.description || '')}</div>
+            ${preset.notes ? `<div class="preset-notes">${escapeHtml(preset.notes)}</div>` : ''}
+        `;
+        div.addEventListener('click', () => applyPreset(preset));
+        panel.appendChild(div);
+    }
+}
+
+function setupPresetsButton() {
+    const btn = document.getElementById('presetsBtn');
+    const panel = document.getElementById('presetsPanel');
+    if (!btn || !panel) return;
+    btn.addEventListener('click', () => panel.classList.toggle('hidden'));
+}
+
+// ----- Валидация ---------------------------------------------------------
+
+function hasOtherSignificantFilters(data) {
+    if (data.query) return true;
+    if (data.region && data.region.length) return true;
+    for (const k of [
+        'finance_revenue_from', 'finance_revenue_to',
+        'finance_profit_from', 'finance_profit_to',
+        'sshr_from', 'sshr_to',
+        'capital_from', 'capital_to',
+    ]) {
+        if (data[k]) return true;
+    }
+    if (data.msp && data.msp.length) return true;
+    if (data.okopf && data.okopf.length) return true;
+    if (data.has_phones || data.has_sites || data.has_emails) return true;
+    if (data.finance_has_actual_year_data || data.not_defendant) return true;
+    return false;
+}
+
+function updateValidation() {
+    const group = document.getElementById('okvedGroup');
+    const errorEl = document.getElementById('okvedError');
+    if (!group || !errorEl) return;
+    const data = getFormData();
+    const hasOkved = OKVED.selected.size > 0;
+    const hasOther = hasOtherSignificantFilters(data);
+    const ok = hasOkved || hasOther;
+    if (!ok) {
+        group.classList.add('has-error');
+        errorEl.classList.remove('hidden');
+    } else {
+        group.classList.remove('has-error');
+        errorEl.classList.add('hidden');
+    }
+    return ok;
+}
+
+// =====================================================================
+// Сабмит
+// =====================================================================
 
 function getFormData() {
     const region = val('region');
     return {
         query: val('query'),
         region: region ? [region] : [],
-        okved: parseOkved(val('okved')),
+        okved: Array.from(OKVED.selected),
+        okved_strict: !checked('okved_loose'),
         status: collectCheckboxGroup('status'),
         okopf: collectCheckboxGroup('okopf'),
         msp: collectCheckboxGroup('msp'),
@@ -201,36 +555,13 @@ function getFormData() {
     };
 }
 
-function hasAnyFilter(data) {
-    if (data.query) return true;
-    for (const k of ['region', 'okved', 'okopf', 'msp']) {
-        if (data[k] && data[k].length) return true;
-    }
-    for (const k of [
-        'finance_revenue_from', 'finance_revenue_to',
-        'finance_profit_from', 'finance_profit_to',
-        'sshr_from', 'sshr_to',
-        'capital_from', 'capital_to',
-    ]) {
-        if (data[k]) return true;
-    }
-    for (const k of [
-        'has_phones', 'has_sites', 'has_emails',
-        'finance_has_actual_year_data', 'not_defendant',
-    ]) {
-        if (data[k]) return true;
-    }
-    return false;
-}
-
 function submitForm(e) {
     e.preventDefault();
-    const data = getFormData();
-
-    if (!hasAnyFilter(data)) {
-        tg.showAlert('Выберите хотя бы один фильтр или введите текст запроса.');
+    if (!updateValidation()) {
+        tg.showAlert('Выберите ОКВЭД из справочника или добавьте другие фильтры.');
         return;
     }
+    const data = getFormData();
     data.source = 'rusprofile';
     tg.sendData(JSON.stringify(data));
 }
@@ -260,12 +591,37 @@ function submitYandexForm(e) {
     tg.sendData(JSON.stringify(payload));
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// =====================================================================
+// init
+// =====================================================================
+
+document.addEventListener('DOMContentLoaded', async () => {
     populateRegions();
     populateYandexRegions();
     setupTabs();
+
     document.getElementById('searchForm').addEventListener('submit', submitForm);
     const yandexForm = document.getElementById('yandexForm');
     if (yandexForm) yandexForm.addEventListener('submit', submitYandexForm);
+
     document.body.style.backgroundColor = tg.themeParams.bg_color || '#ffffff';
+
+    try {
+        await loadOkvedHandbook();
+        setupOkvedSearch();
+        renderPresetsPanel();
+        setupPresetsButton();
+    } catch (err) {
+        console.error('Не удалось загрузить справочник ОКВЭД:', err);
+        const errorEl = document.getElementById('okvedError');
+        if (errorEl) {
+            errorEl.textContent = 'Не удалось загрузить справочник ОКВЭД.';
+            errorEl.classList.remove('hidden');
+        }
+    }
+
+    // Любая правка фильтров перезапускает валидацию — кнопка
+    // окрашивается / ошибка скрывается на лету.
+    document.getElementById('searchForm').addEventListener('input', () => updateValidation());
+    document.getElementById('searchForm').addEventListener('change', () => updateValidation());
 });

@@ -26,6 +26,7 @@ from src.rusprofile.parser import parse_search_results, enrich_company_details, 
 from src.rusprofile.filters import SearchFilters
 from src.sheets.client import write_companies, get_sheet_url
 from src.yandex_maps.runner import parse_yandex
+from src.okved.search import filter_codes_in_handbook
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -194,10 +195,26 @@ async def handle_webapp_data(message: Message):
             _active_tasks[user_id] = task
             return
 
+        # Mini App присылает okved_strict явным булевым значением:
+        # true (по умолчанию) — искать только по основному ОКВЭД компании,
+        # false — также по дополнительным ОКВЭД. Если ключа нет
+        # (старый клиент) — оставляем None, чтобы filters.py применил
+        # своё дефолтное поведение (strict=True при наличии кодов).
+        okved_strict_raw = data.get("okved_strict")
+        if okved_strict_raw is None:
+            okved_strict_value: bool | None = None
+        else:
+            okved_strict_value = bool(okved_strict_raw)
+
+        # Отфильтровываем мусорные коды — Mini App может прислать всё что
+        # угодно, на бэкенде валидируем по справочнику data/okved/.
+        okved_codes = filter_codes_in_handbook(_as_list(data.get("okved")))
+
         filters = SearchFilters(
             query=data.get("query") or None,
             region=_as_list(data.get("region")),
-            okved=_as_list(data.get("okved")),
+            okved=okved_codes,
+            okved_strict=okved_strict_value,
             okopf=_as_list(data.get("okopf")),
             msp=_as_list(data.get("msp")),
             status=_as_list(data.get("status")) or ["1"],  # по умолчанию «Действующая»
