@@ -22,12 +22,16 @@ class YandexPlace:
 
     def to_row(self) -> list[str]:
         """Конвертирует в строку для Google Sheets (порядок — YANDEX_SHEET_HEADERS)."""
+        # Префикс ' нужен телефону, иначе Google Sheets со значением
+        # value_input_option=USER_ENTERED трактует "+7..." как формулу
+        # и показывает #ERROR! в ячейке. Апостроф форсирует текст.
+        phone = f"'{self.phone}" if self.phone else ""
         return [
             self.name,
             self.categories,
             self.region,
             self.address,
-            self.phone,
+            phone,
             self.site,
             self.rating,
             self.reviews_count,
