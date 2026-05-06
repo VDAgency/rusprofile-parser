@@ -68,6 +68,7 @@ def write_companies(
     companies: list,
     sheet_name: str = "Результаты",
     headers: list[str] | None = None,
+    replace: bool = False,
 ) -> str:
     """Записывает список объектов в Google Sheets.
 
@@ -77,6 +78,9 @@ def write_companies(
         headers: заголовки столбцов; по умолчанию — ``SHEET_HEADERS``
             (формат Rusprofile). Для листа «Яндекс Карты» передаётся
             ``YANDEX_SHEET_HEADERS``.
+        replace: если True — очищает все строки данных (кроме заголовка)
+            перед записью. Для Яндекс Карт каждый запуск парсинга должен
+            переписывать лист, а не дописывать к старым данным.
 
     Returns:
         URL таблицы.
@@ -94,12 +98,23 @@ def write_companies(
         logger.warning("Нет данных для записи")
         return spreadsheet.url
 
-    # Считаем следующую свободную строку по существующим данным,
-    # и принудительно расширяем сетку — ws.update() не растит лист сам,
-    # а новый лист после clear_sheet может иметь row_count=1.
-    existing = ws.get_all_values()
-    start_row = len(existing) + 1
-    end_row = start_row + len(rows) - 1
+    if replace:
+        # Чистим все строки данных (заголовок остаётся), затем пишем с A2.
+        last_col = _col_letter(len(headers))
+        existing_rows = len(ws.get_all_values())
+        if existing_rows > 1:
+            ws.batch_clear([f"A2:{last_col}{existing_rows}"])
+            logger.info("Лист '%s' очищен перед записью (%d строк данных)",
+                        sheet_name, existing_rows - 1)
+        start_row = 2
+        end_row = start_row + len(rows) - 1
+    else:
+        # Считаем следующую свободную строку по существующим данным,
+        # и принудительно расширяем сетку — ws.update() не растит лист сам,
+        # а новый лист после clear_sheet может иметь row_count=1.
+        existing = ws.get_all_values()
+        start_row = len(existing) + 1
+        end_row = start_row + len(rows) - 1
 
     if ws.row_count < end_row:
         ws.add_rows(end_row - ws.row_count)

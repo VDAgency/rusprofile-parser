@@ -322,6 +322,7 @@ async def _run_yandex_parsing(
             places,
             sheet_name=YANDEX_SHEET_NAME,
             headers=YANDEX_SHEET_HEADERS,
+            replace=True,
         )
 
         await status_msg.edit_text(
