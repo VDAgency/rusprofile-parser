@@ -65,6 +65,10 @@ class Company:
 
     def to_row(self) -> list[str]:
         """Конвертирует в строку для Google Sheets."""
+        # Префикс ' нужен телефону, иначе Google Sheets со значением
+        # value_input_option=USER_ENTERED трактует "+7..." как формулу
+        # и показывает #ERROR! в ячейке. Апостроф форсирует текст.
+        phone = f"'{self.phone}" if self.phone else ""
         return [
             self.name,
             self.inn,
@@ -74,7 +78,7 @@ class Company:
             self.okved,
             self.revenue,
             self.profit,
-            self.phone,
+            phone,
             self.email,
             self.site,
             self.status,

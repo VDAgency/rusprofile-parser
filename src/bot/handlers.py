@@ -263,7 +263,7 @@ async def _run_parsing(message: Message, filters: SearchFilters):
             await context.browser.close()
 
         await status_msg.edit_text("Выгружаю результаты в Google Sheets...")
-        sheet_url = write_companies(companies)
+        sheet_url = write_companies(companies, replace=True)
 
         await status_msg.edit_text(
             f"Готово! Найдено {len(companies)} компаний.\n\n"
