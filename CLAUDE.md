@@ -41,13 +41,16 @@ cp .env.example .env       # заполнить данными
 
 Весь исходный код в `src/`. Проект объединяет:
 - Скрапер на Playwright — авторизация на Rusprofile и извлечение данных о компаниях
-- Telegram-бот (aiogram 3, асинхронный) с Mini App UI для взаимодействия с пользователем
+- Telegram-бот (aiogram 3) + HTTP API (aiohttp) в одном процессе
+- Mini App UI с двумя вкладками: «Парсинг» и «История»
 - Интеграция с Google Sheets (gspread) для экспорта результатов
 - Справочник ОКВЭД с поиском по «живым» запросам (`src/okved/`, `data/okved/`)
 - Параллельный источник Яндекс Карт (`src/yandex_maps/`)
+- Локальная БД (SQLite, миграции Alembic) для дедупа и истории запусков
 - Планируемая интеграция с OpenAI для анализа сайтов компаний
 
-Секреты конфигурации в `config/` (credentials.json в .gitignore). Логи в `logs/`.
+Секреты конфигурации в `config/` (credentials.json в .gitignore).
+SQLite-файл — `data/parser.db` (в .gitignore). Логи в `logs/`.
 
 ## Справочник ОКВЭД
 
@@ -63,10 +66,38 @@ cp .env.example .env       # заполнить данными
 * Тесты: `pytest tests/test_okved.py` (24 теста — целостность
   иерархии, поиск, пресеты).
 
+## База данных, дедуп и история
+
+* Схема: `Tenant → Theme → ParseRun → RunCompany → Company`. Multi-tenancy
+  с самого начала: `tenant_id` во всех таблицах. Tenant = telegram_user_id.
+* Дедуп — гибрид: ИНН/ОГРН — главные ключи; телефон — fallback **только**
+  если у обеих сторон ИНН и ОГРН пустые. Алгоритм в `src/db/dedup.py`.
+* Тема — стабильный SHA-256 от канонизированных фильтров, дедуп идёт
+  внутри темы.
+* Лимит парсинга — «Сколько новых компаний найти» (1–300, default 100)
+  в Mini App; парсер останавливается при достижении.
+* Документация: ТЗ — `docs/tz_dedup_db.md`, краткий обзор — `data/db/README.md`.
+* Тесты: `pytest tests/test_db.py tests/test_api_auth.py`.
+
+## Миграции
+
+* SQLAlchemy 2.0 + Alembic. Миграции в `alembic/versions/`.
+* Новая миграция: `alembic revision --autogenerate -m "что"`.
+* Применить: `alembic upgrade head` (часть деплой-чеклиста).
+
+## HTTP API для Mini App
+
+* `src/api/server.py` — aiohttp в том же процессе, что и aiogram-бот.
+* Эндпойнты `/api/history`, `/api/runs/{id}/repush`, `/api/runs/{id}/xlsx`,
+  `/api/healthz`. Все приватные требуют валидный
+  Telegram WebApp initData (`X-Telegram-Init-Data`, проверка HMAC в
+  `src/api/auth.py`, TTL 12 ч).
+* Nginx проксирует `/api/` → `127.0.0.1:8080`.
+
 ## Важные правила работы
 
 * Парсер Яндекс Карт (`src/yandex_maps/`) — рабочий и используется в
   проде, без согласования его не трогать.
 * Деплой на сервер делаем только после полной локальной проверки;
-  изменения по справочнику ОКВЭД готовы к деплою после успешного
-  прогона `pytest` и ручной проверки Mini App.
+  при правках схемы БД — обязательно `alembic upgrade head` после
+  `git pull` на сервере.
