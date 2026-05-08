@@ -244,6 +244,7 @@ async def run_rusprofile(
                 sheet_url=None, status=run.status, error_message=run.error_message,
             )
 
+        seen_company_ids: set[int] = set()
         for c in new_companies:
             db_c, _ = upsert_company(
                 session, tenant,
@@ -256,6 +257,12 @@ async def run_rusprofile(
                 status=c.status or None,
                 raw={"detail_href": c.detail_href},
             )
+            # Несколько новых карточек могут после enrich оказаться одной
+            # компанией (редкий случай у Rusprofile, но возможный) — не
+            # добавляем дубль RunCompany.
+            if db_c.id in seen_company_ids:
+                continue
+            seen_company_ids.add(db_c.id)
             session.add(RunCompany(run_id=run.id, company_id=db_c.id, is_new=True))
             persisted_companies.append(c)
 
@@ -418,6 +425,12 @@ async def run_yandex(
 
         # После enrich мог появиться телефон — на этом этапе ещё одна
         # проверка дубликата через upsert (внутри _find_existing_company).
+        # Несколько YandexPlace могут после enrich «схлопнуться» в одну
+        # и ту же компанию (общий телефон у сети ресторанов и т.п.) —
+        # тогда upsert вернёт один и тот же db_c.id. RunCompany имеет
+        # PRIMARY KEY (run_id, company_id), поэтому второй INSERT упадёт
+        # с UNIQUE constraint failed. Дедуплируем через set.
+        seen_company_ids: set[int] = set()
         for p in new_places:
             db_c, created = upsert_company(
                 session, tenant,
@@ -431,6 +444,12 @@ async def run_yandex(
                     "yandex_url": p.yandex_url,
                 },
             )
+            if db_c.id in seen_company_ids:
+                # В этом запуске уже есть RunCompany для этой компании —
+                # пропускаем, иначе IntegrityError.
+                skipped += 1
+                continue
+            seen_company_ids.add(db_c.id)
             session.add(RunCompany(
                 run_id=run.id, company_id=db_c.id, is_new=created,
             ))

@@ -22,7 +22,14 @@ from sqlalchemy import select
 
 from src.api.auth import get_user_id, get_username
 from src.api.export_xlsx import export_run_to_xlsx
-from src.config import API_HOST, API_PORT, SHEET_HEADERS, YANDEX_SHEET_HEADERS, YANDEX_SHEET_NAME
+from src.config import (
+    ALLOW_UNSAFE_USER_IDS,
+    API_HOST,
+    API_PORT,
+    SHEET_HEADERS,
+    YANDEX_SHEET_HEADERS,
+    YANDEX_SHEET_NAME,
+)
 from src.db import (
     Company,
     ParseRun,
@@ -44,20 +51,71 @@ logger = logging.getLogger(__name__)
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler: Callable):
-    """Все /api/* эндпойнты требуют initData, кроме /api/healthz."""
-    if request.path == "/api/healthz":
+    """Все /api/* эндпойнты требуют initData, кроме /api/healthz и /api/debug/me."""
+    if request.path in ("/api/healthz", "/api/debug/me"):
         return await handler(request)
 
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_id = get_user_id(init_data)
+    auth_mode = "initData"
+
+    if not user_id:
+        # Fallback: некоторые клиенты (Telegram Desktop под Windows)
+        # не передают `tg.initData`. Принимаем заявленный user_id из
+        # `X-Telegram-User-Id-Unsafe`, **только** если он в whitelist
+        # (см. ALLOW_UNSAFE_USER_IDS в .env). Это компромисс
+        # удобства/безопасности на ранней стадии — при росте проекта
+        # whitelist должен быть пустым, и эта ветка отключится сама.
+        unsafe_raw = request.headers.get("X-Telegram-User-Id-Unsafe", "")
+        if unsafe_raw.isdigit():
+            unsafe_id = int(unsafe_raw)
+            if unsafe_id in ALLOW_UNSAFE_USER_IDS:
+                user_id = unsafe_id
+                auth_mode = "unsafe-whitelist"
+                logger.warning(
+                    "Auth fallback: user_id=%d из whitelist (initData не передана)",
+                    user_id,
+                )
+
     if not user_id:
         return web.json_response(
             {"error": "unauthorized", "detail": "invalid Telegram initData"},
             status=401,
         )
+
     request["user_id"] = user_id
-    request["username"] = get_username(init_data)
+    request["username"] = get_username(init_data) if auth_mode == "initData" else None
+    request["auth_mode"] = auth_mode
     return await handler(request)
+
+
+# ---------------------------------------------------------------------------
+# Debug-эндпойнт: пользователь может открыть его в Mini App, чтобы понять,
+# что приходит. Никаких приватных данных не отдаёт — только метаданные
+# initData (длину, наличие полей), без её содержимого.
+# ---------------------------------------------------------------------------
+
+
+async def debug_me(request: web.Request) -> web.Response:
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    unsafe_raw = request.headers.get("X-Telegram-User-Id-Unsafe", "")
+    parsed = None
+    try:
+        from src.api.auth import parse_init_data
+        parsed = parse_init_data(init_data) if init_data else None
+    except Exception as e:  # noqa: BLE001
+        parsed = {"_error": str(e)}
+
+    return web.json_response({
+        "init_data_present": bool(init_data),
+        "init_data_length": len(init_data),
+        "init_data_valid": parsed is not None,
+        "unsafe_user_id_header": unsafe_raw or None,
+        "unsafe_user_id_in_whitelist": (
+            unsafe_raw.isdigit() and int(unsafe_raw) in ALLOW_UNSAFE_USER_IDS
+        ),
+        "whitelist_size": len(ALLOW_UNSAFE_USER_IDS),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +309,7 @@ async def download_xlsx(request: web.Request) -> web.Response:
 def build_app() -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
     app.router.add_get("/api/healthz", healthz)
+    app.router.add_get("/api/debug/me", debug_me)
     app.router.add_get("/api/history", history)
     app.router.add_post("/api/runs/{run_id}/repush", repush_to_sheets)
     app.router.add_get("/api/runs/{run_id}/xlsx", download_xlsx)

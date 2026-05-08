@@ -630,12 +630,21 @@ function setupBottomNav() {
 let historyLoaded = false;
 
 function apiHeaders() {
-    // Mini App прокидывает Telegram initData — этим сервер
-    // удостоверится в том, кто запрашивает.
-    return {
+    // Mini App прокидывает Telegram initData — сервер проверяет HMAC
+    // и достаёт user_id. На некоторых клиентах (Telegram Desktop под
+    // Windows) `tg.initData` пустая — добавляем заявленный user_id из
+    // `initDataUnsafe` как fallback. Сервер примет его только если
+    // user_id есть в whitelist (ALLOW_UNSAFE_USER_IDS).
+    const headers = {
         'X-Telegram-Init-Data': tg.initData || '',
         'Content-Type': 'application/json',
     };
+    const unsafeUid = tg.initDataUnsafe && tg.initDataUnsafe.user
+        ? tg.initDataUnsafe.user.id : null;
+    if (unsafeUid) {
+        headers['X-Telegram-User-Id-Unsafe'] = String(unsafeUid);
+    }
+    return headers;
 }
 
 async function loadHistory(force = false) {
@@ -653,7 +662,15 @@ async function loadHistory(force = false) {
             headers: apiHeaders(),
         });
         if (resp.status === 401) {
-            statusEl.textContent = 'Не удалось проверить авторизацию Telegram. Откройте Mini App из бота.';
+            const initLen = (tg.initData || '').length;
+            const uid = tg.initDataUnsafe && tg.initDataUnsafe.user
+                ? tg.initDataUnsafe.user.id : null;
+            statusEl.innerHTML = (
+                'Не удалось проверить авторизацию Telegram.<br>' +
+                `<small>initData length: ${initLen}, user.id: ${uid || '—'}</small><br>` +
+                '<small>Если используете Telegram Desktop под Windows — initData может не передаваться. ' +
+                'Попробуйте мобильный клиент или сообщите user.id выше администратору, чтобы добавить вас в whitelist.</small>'
+            );
             return;
         }
         if (!resp.ok) {

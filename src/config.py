@@ -42,6 +42,20 @@ DATABASE_URL = os.getenv(
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8080"))
 
+# Whitelist user_id для unsafe-аутентификации Mini App.
+# Используется как fallback, когда Telegram-клиент НЕ передаёт
+# `tg.initData` (известная проблема Telegram Desktop под Windows).
+# Формат: "12345678,87654321" — список через запятую.
+# Безопасность: сервер примет `X-Telegram-User-Id-Unsafe` ТОЛЬКО для
+# id из этого whitelist. На SaaS-этапе whitelist должен быть пустым.
+_unsafe_raw = os.getenv("ALLOW_UNSAFE_USER_IDS", "").strip()
+ALLOW_UNSAFE_USER_IDS: set[int] = set()
+if _unsafe_raw:
+    for chunk in _unsafe_raw.split(","):
+        chunk = chunk.strip()
+        if chunk.isdigit():
+            ALLOW_UNSAFE_USER_IDS.add(int(chunk))
+
 # Лимит «новых» компаний за один запуск парсинга — общий для всех
 # источников. UI ограничивает выбором 1..MAX_NEW_HARD_LIMIT.
 DEFAULT_MAX_NEW = 100
