@@ -630,8 +630,22 @@ function setupBottomNav() {
 let historyLoaded = false;
 
 function getUnsafeUid() {
+    // 1) Стандартный путь — Telegram передал user через initDataUnsafe.
     if (tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id) {
         return String(tg.initDataUnsafe.user.id);
+    }
+    // 2) Обходной путь: бот подложил user_id в URL Mini App
+    //    (когда has_main_web_app=false и Telegram не передаёт user).
+    try {
+        const urlUid = new URLSearchParams(window.location.search).get('uid');
+        if (urlUid && /^\d+$/.test(urlUid)) {
+            return urlUid;
+        }
+    } catch (_) { /* ignore */ }
+    // 3) start_param из Telegram (если запущен через t.me/<bot>?startapp=<uid>).
+    if (tg.initDataUnsafe && tg.initDataUnsafe.start_param
+        && /^\d+$/.test(tg.initDataUnsafe.start_param)) {
+        return tg.initDataUnsafe.start_param;
     }
     return null;
 }

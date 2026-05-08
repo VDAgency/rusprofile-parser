@@ -36,13 +36,37 @@ BTN_STATUS = "⚙️ Статус"
 BTN_HELP = "ℹ️ Помощь"
 
 
-def _get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Постоянная клавиатура внизу экрана."""
+def _webapp_url_for(user_id: int | None) -> str:
+    """Возвращает URL Mini App с подставленным uid в query.
+
+    Если бот не зарегистрирован как Mini App в BotFather (поле
+    `has_main_web_app=false`), Telegram не передаёт ни `initData`,
+    ни `initDataUnsafe.user`. Без user_id наш бэкенд ничего не может
+    идентифицировать и возвращает 401 на /api/.
+
+    Обходной путь: подкладываем user_id прямо в URL — JS Mini App
+    прочитает его из window.location.search и передаст в API. Сервер
+    приложит whitelist-проверку (`ALLOW_UNSAFE_USER_IDS`).
+    """
+    base = TELEGRAM_WEBAPP_URL or ""
+    if not base or not user_id:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}uid={user_id}"
+
+
+def _get_main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура внизу экрана.
+
+    Принимает ``user_id`` чтобы подставить его в URL Mini App
+    (см. ``_webapp_url_for``). Без user_id — оставляем базовый URL.
+    """
     buttons = []
 
     if TELEGRAM_WEBAPP_URL:
+        url = _webapp_url_for(user_id)
         buttons.append([
-            KeyboardButton(text=BTN_PARSE, web_app=WebAppInfo(url=TELEGRAM_WEBAPP_URL)),
+            KeyboardButton(text=BTN_PARSE, web_app=WebAppInfo(url=url)),
         ])
 
     buttons.append([
@@ -63,7 +87,7 @@ def _get_main_keyboard() -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Обработчик команды /start."""
-    kb = _get_main_keyboard()
+    kb = _get_main_keyboard(user_id=message.from_user.id)
     text = (
         "Привет! Я бот для парсинга компаний с Rusprofile.\n\n"
         "Нажмите «🚀 Открыть парсер», чтобы задать фильтры и запустить поиск.\n\n"
