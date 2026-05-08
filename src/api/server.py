@@ -1,0 +1,270 @@
+"""aiohttp HTTP API в одном процессе с aiogram-ботом.
+
+Эндпойнты:
+* GET  /api/history?limit=50      — список запусков пользователя.
+* POST /api/runs/{run_id}/repush  — заново записать компании запуска
+                                    в Sheets, вернуть sheet_url.
+* GET  /api/runs/{run_id}/xlsx    — скачать Excel.
+* GET  /api/healthz               — публичный, для мониторинга.
+
+Все приватные эндпойнты валидируют Telegram WebApp initData,
+переданный в заголовке ``X-Telegram-Init-Data`` (Mini App
+прокидывает его в каждом запросе).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Awaitable, Callable
+
+from aiohttp import web
+from sqlalchemy import select
+
+from src.api.auth import get_user_id, get_username
+from src.api.export_xlsx import export_run_to_xlsx
+from src.config import API_HOST, API_PORT, SHEET_HEADERS, YANDEX_SHEET_HEADERS, YANDEX_SHEET_NAME
+from src.db import (
+    Company,
+    ParseRun,
+    RunCompany,
+    Source,
+    Tenant,
+    format_phone_for_display,
+    get_session,
+)
+from src.sheets.client import write_companies
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Middleware: валидация initData и подмена user_id в request
+# ---------------------------------------------------------------------------
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler: Callable):
+    """Все /api/* эндпойнты требуют initData, кроме /api/healthz."""
+    if request.path == "/api/healthz":
+        return await handler(request)
+
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_id = get_user_id(init_data)
+    if not user_id:
+        return web.json_response(
+            {"error": "unauthorized", "detail": "invalid Telegram initData"},
+            status=401,
+        )
+    request["user_id"] = user_id
+    request["username"] = get_username(init_data)
+    return await handler(request)
+
+
+# ---------------------------------------------------------------------------
+# Хелпер: tenant по user_id
+# ---------------------------------------------------------------------------
+
+
+def _tenant_by_user(session, telegram_user_id: int) -> Tenant | None:
+    return session.scalar(
+        select(Tenant).where(Tenant.telegram_user_id == telegram_user_id)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Эндпойнты
+# ---------------------------------------------------------------------------
+
+
+async def healthz(_: web.Request) -> web.Response:
+    return web.json_response({"ok": True})
+
+
+async def history(request: web.Request) -> web.Response:
+    user_id = request["user_id"]
+    try:
+        limit = int(request.query.get("limit", "50"))
+    except ValueError:
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    with get_session() as session:
+        tenant = _tenant_by_user(session, user_id)
+        if not tenant:
+            return web.json_response({"runs": []})
+
+        rows = session.execute(
+            select(ParseRun)
+            .where(ParseRun.tenant_id == tenant.id)
+            .order_by(ParseRun.started_at.desc())
+            .limit(limit)
+        ).scalars().all()
+
+        # Соберём все theme_id одним запросом
+        theme_ids = list({r.theme_id for r in rows})
+        themes_by_id = {}
+        if theme_ids:
+            from src.db.models import Theme
+            themes = session.execute(
+                select(Theme).where(Theme.id.in_(theme_ids))
+            ).scalars().all()
+            themes_by_id = {t.id: t for t in themes}
+
+        result = []
+        for r in rows:
+            theme = themes_by_id.get(r.theme_id)
+            result.append({
+                "id": r.id,
+                "source": r.source,
+                "status": r.status,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "requested_new": r.requested_new,
+                "total_new": r.total_new,
+                "total_skipped": r.total_skipped,
+                "sheet_url": r.sheet_url,
+                "theme_title": theme.title if theme else "",
+                "theme_filters": theme.filters_json if theme else {},
+            })
+    return web.json_response({"runs": result})
+
+
+async def repush_to_sheets(request: web.Request) -> web.Response:
+    user_id = request["user_id"]
+    try:
+        run_id = int(request.match_info["run_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "bad run_id"}, status=400)
+
+    # 1. Достаём компании запуска под транзакцией
+    with get_session() as session:
+        tenant = _tenant_by_user(session, user_id)
+        if not tenant:
+            return web.json_response({"error": "no tenant"}, status=404)
+        run = session.get(ParseRun, run_id)
+        if not run or run.tenant_id != tenant.id:
+            return web.json_response({"error": "run not found"}, status=404)
+        rows = session.execute(
+            select(Company)
+            .join(RunCompany, RunCompany.company_id == Company.id)
+            .where(RunCompany.run_id == run.id)
+            .order_by(Company.id)
+        ).scalars().all()
+        run_source = run.source
+
+    if not rows:
+        return web.json_response({"error": "empty run"}, status=400)
+
+    # 2. Вне сессии конвертируем в объекты с .to_row(), которые ждёт sheets-клиент.
+    if run_source == Source.YANDEX_MAPS.value:
+        from src.yandex_maps.parser import YandexPlace
+        objs = []
+        for c in rows:
+            raw = c.raw_json or {}
+            objs.append(YandexPlace(
+                name=c.name or "",
+                categories=c.okved or "",
+                region=c.region or "",
+                address=c.address or "",
+                phone=format_phone_for_display(c.phone) if c.phone else "",
+                site=c.site or "",
+                rating=str(raw.get("rating") or ""),
+                reviews_count=str(raw.get("reviews_count") or ""),
+                hours=raw.get("hours") or "",
+                coordinates=raw.get("coordinates") or "",
+                yandex_url=raw.get("yandex_url") or "",
+                parse_date=(c.last_seen_at.strftime("%d.%m.%Y")
+                            if c.last_seen_at else ""),
+            ))
+        sheet_url = write_companies(
+            objs, sheet_name=YANDEX_SHEET_NAME,
+            headers=YANDEX_SHEET_HEADERS, replace=True,
+        )
+    else:
+        from src.rusprofile.parser import Company as RusprofileCompany
+        objs = []
+        for c in rows:
+            objs.append(RusprofileCompany(
+                name=c.name or "",
+                inn=c.inn or "",
+                ogrn=c.ogrn or "",
+                region=c.region or "",
+                address=c.address or "",
+                okved=c.okved or "",
+                revenue=c.revenue or "",
+                profit=c.profit or "",
+                phone=format_phone_for_display(c.phone) if c.phone else "",
+                email=c.email or "",
+                site=c.site or "",
+                status=c.status or "",
+                parse_date=(c.last_seen_at.strftime("%d.%m.%Y")
+                            if c.last_seen_at else ""),
+            ))
+        sheet_url = write_companies(objs, replace=True)
+
+    # 3. Запоминаем последний sheet_url у запуска
+    with get_session() as session:
+        run = session.get(ParseRun, run_id)
+        if run:
+            run.sheet_url = sheet_url
+
+    return web.json_response({"sheet_url": sheet_url, "exported": len(objs)})
+
+
+async def download_xlsx(request: web.Request) -> web.Response:
+    user_id = request["user_id"]
+    try:
+        run_id = int(request.match_info["run_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "bad run_id"}, status=400)
+
+    with get_session() as session:
+        tenant = _tenant_by_user(session, user_id)
+        if not tenant:
+            return web.json_response({"error": "no tenant"}, status=404)
+        run = session.get(ParseRun, run_id)
+        if not run or run.tenant_id != tenant.id:
+            return web.json_response({"error": "run not found"}, status=404)
+
+        try:
+            data, filename = export_run_to_xlsx(session, run_id)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=404)
+
+    return web.Response(
+        body=data,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Сборка приложения
+# ---------------------------------------------------------------------------
+
+
+def build_app() -> web.Application:
+    app = web.Application(middlewares=[auth_middleware])
+    app.router.add_get("/api/healthz", healthz)
+    app.router.add_get("/api/history", history)
+    app.router.add_post("/api/runs/{run_id}/repush", repush_to_sheets)
+    app.router.add_get("/api/runs/{run_id}/xlsx", download_xlsx)
+    return app
+
+
+async def start_api_server() -> web.AppRunner:
+    """Запускает aiohttp-сервер. Возвращает runner — его надо не забыть
+    закрыть при остановке.
+    """
+    app = build_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, API_HOST, API_PORT)
+    await site.start()
+    logger.info("HTTP API запущен на http://%s:%d", API_HOST, API_PORT)
+    return runner

@@ -20,6 +20,7 @@ from aiogram.types import (
 
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBAPP_URL, LOG_DIR, LOG_FILE
 from src.bot.handlers import router
+from src.api.server import start_api_server
 
 
 def setup_logging():
@@ -86,9 +87,14 @@ async def main():
     me = await bot.get_me()
     logger.info("Бот @%s (ID: %s) запущен", me.username, me.id)
 
+    # HTTP API для Mini App (история, re-export, Excel) живёт в том же
+    # процессе. Nginx проксирует /api/ → 127.0.0.1:API_PORT.
+    api_runner = await start_api_server()
+
     try:
         await dp.start_polling(bot)
     finally:
+        await api_runner.cleanup()
         await bot.session.close()
 
 

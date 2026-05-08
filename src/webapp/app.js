@@ -603,10 +603,171 @@ function submitYandexForm(e) {
 // init
 // =====================================================================
 
+// =====================================================================
+// Bottom-nav: переключение «Парсинг» / «История»
+// =====================================================================
+
+function setupBottomNav() {
+    const buttons = document.querySelectorAll('.bottom-nav .nav-btn');
+    buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const target = btn.dataset.page;
+            buttons.forEach((b) => b.classList.toggle('active', b === btn));
+            document.querySelectorAll('.page').forEach((p) => {
+                p.classList.toggle('hidden', p.id !== `page-${target}`);
+            });
+            if (target === 'history') {
+                loadHistory();
+            }
+        });
+    });
+}
+
+// =====================================================================
+// История запусков
+// =====================================================================
+
+let historyLoaded = false;
+
+function apiHeaders() {
+    // Mini App прокидывает Telegram initData — этим сервер
+    // удостоверится в том, кто запрашивает.
+    return {
+        'X-Telegram-Init-Data': tg.initData || '',
+        'Content-Type': 'application/json',
+    };
+}
+
+async function loadHistory(force = false) {
+    const statusEl = document.getElementById('history-status');
+    const listEl = document.getElementById('history-list');
+    if (!statusEl || !listEl) return;
+
+    if (historyLoaded && !force) return;
+
+    statusEl.textContent = 'Загрузка…';
+    listEl.innerHTML = '';
+
+    try {
+        const resp = await fetch('/api/history?limit=50', {
+            headers: apiHeaders(),
+        });
+        if (resp.status === 401) {
+            statusEl.textContent = 'Не удалось проверить авторизацию Telegram. Откройте Mini App из бота.';
+            return;
+        }
+        if (!resp.ok) {
+            statusEl.textContent = 'Ошибка загрузки истории.';
+            return;
+        }
+        const data = await resp.json();
+        const runs = data.runs || [];
+        if (!runs.length) {
+            statusEl.textContent = 'Запусков пока нет. Запустите парсинг — они появятся здесь.';
+            return;
+        }
+        statusEl.textContent = `Найдено запусков: ${runs.length}`;
+        listEl.innerHTML = runs.map(renderRunCard).join('');
+        attachRunActions();
+        historyLoaded = true;
+    } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Сеть недоступна или сервер не отвечает.';
+    }
+}
+
+function renderRunCard(run) {
+    const date = run.finished_at || run.started_at || '';
+    const dateStr = date ? new Date(date).toLocaleString('ru-RU') : '';
+    const sourceLabel = run.source === 'yandex_maps' ? 'Яндекс.Карты' : 'Rusprofile';
+    const stats = run.status === 'error'
+        ? `<span class="run-status-error">Ошибка: ${escapeHtml(run.theme_filters?.error || 'не выполнен')}</span>`
+        : `Новых: <b>${run.total_new}</b> · пропущено: ${run.total_skipped}`;
+
+    const sheetBtn = run.sheet_url
+        ? `<a class="btn-mini" href="${escapeHtml(run.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу</a>`
+        : '';
+
+    return `
+        <div class="run-card" data-run-id="${run.id}">
+            <div class="run-head">
+                <span class="run-source">${escapeHtml(sourceLabel)}</span>
+                <span class="run-date">${escapeHtml(dateStr)}</span>
+            </div>
+            <div class="run-title">${escapeHtml(run.theme_title || '(без заголовка)')}</div>
+            <div class="run-stats">${stats}</div>
+            <div class="run-actions">
+                ${sheetBtn}
+                <button type="button" class="btn-mini" data-action="repush">Перезалить в Sheets</button>
+                <button type="button" class="btn-mini primary" data-action="xlsx">Скачать Excel</button>
+            </div>
+        </div>
+    `;
+}
+
+function attachRunActions() {
+    document.querySelectorAll('.run-card').forEach((card) => {
+        const runId = card.dataset.runId;
+        card.querySelectorAll('[data-action]').forEach((btn) => {
+            btn.addEventListener('click', () => onRunAction(runId, btn.dataset.action, btn));
+        });
+    });
+}
+
+async function onRunAction(runId, action, btn) {
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+        if (action === 'repush') {
+            const resp = await fetch(`/api/runs/${runId}/repush`, {
+                method: 'POST',
+                headers: apiHeaders(),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                tg.showAlert(data.error || 'Не удалось перезалить.');
+                return;
+            }
+            tg.showAlert(`Готово. Перезаписано ${data.exported} компаний в Sheets.`);
+        } else if (action === 'xlsx') {
+            // fetch с авторизацией (заголовок), но скачивание у Telegram-вебвью
+            // ограничено — используем стандартный download через Blob.
+            const resp = await fetch(`/api/runs/${runId}/xlsx`, {
+                headers: apiHeaders(),
+            });
+            if (!resp.ok) {
+                tg.showAlert('Ошибка экспорта Excel.');
+                return;
+            }
+            const blob = await resp.blob();
+            const cd = resp.headers.get('Content-Disposition') || '';
+            const fnameMatch = cd.match(/filename="?([^"]+)"?/);
+            const fname = fnameMatch ? fnameMatch[1] : `run_${runId}.xlsx`;
+
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fname;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+    } catch (err) {
+        console.error(err);
+        tg.showAlert('Сеть недоступна.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     populateRegions();
     populateYandexRegions();
     setupTabs();
+    setupBottomNav();
 
     document.getElementById('searchForm').addEventListener('submit', submitForm);
     const yandexForm = document.getElementById('yandexForm');
@@ -628,8 +789,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // Любая правка фильтров перезапускает валидацию — кнопка
-    // окрашивается / ошибка скрывается на лету.
+    // Любая правка фильтров перезапускает валидацию.
     document.getElementById('searchForm').addEventListener('input', () => updateValidation());
     document.getElementById('searchForm').addEventListener('change', () => updateValidation());
 });

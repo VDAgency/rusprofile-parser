@@ -9,6 +9,9 @@
 </head>
 <body>
     <div class="container">
+
+      <!-- Главные вкладки: Парсинг / История -->
+      <div id="page-parse" class="page">
         <h1>Поиск компаний</h1>
         <p class="subtitle">Настройте фильтры и запустите парсинг</p>
 
@@ -280,7 +283,32 @@
             </div>
             <div class="progress-info" id="progressInfo"></div>
         </div>
-    </div>
+      </div>  <!-- /#page-parse -->
+
+      <!-- Вкладка «История» -->
+      <div id="page-history" class="page hidden">
+        <h1>История парсинга</h1>
+        <p class="subtitle">
+            Все ваши прошлые запуски — можно перезалить в Sheets или
+            скачать Excel-файл без повторного парсинга.
+        </p>
+        <div id="history-status" class="hint">Загрузка…</div>
+        <div id="history-list"></div>
+      </div>
+
+    </div>  <!-- /.container -->
+
+    <!-- Нижняя навигация -->
+    <nav class="bottom-nav">
+        <button type="button" class="nav-btn active" data-page="parse">
+            <span class="nav-icon">🔍</span>
+            <span class="nav-label">Парсинг</span>
+        </button>
+        <button type="button" class="nav-btn" data-page="history">
+            <span class="nav-icon">📜</span>
+            <span class="nav-label">История</span>
+        </button>
+    </nav>
 
     <script src="app.js"></script>
 </body>
