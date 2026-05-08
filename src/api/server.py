@@ -62,31 +62,41 @@ async def auth_middleware(request: web.Request, handler: Callable):
     if not user_id:
         # Fallback: некоторые клиенты (Telegram Desktop под Windows)
         # не передают `tg.initData`. Принимаем заявленный user_id из
-        # `X-Telegram-User-Id-Unsafe`, **только** если он в whitelist
-        # (см. ALLOW_UNSAFE_USER_IDS в .env). Это компромисс
-        # удобства/безопасности на ранней стадии — при росте проекта
-        # whitelist должен быть пустым, и эта ветка отключится сама.
-        unsafe_raw = request.headers.get("X-Telegram-User-Id-Unsafe", "")
+        # `X-Telegram-User-Id-Unsafe` ИЛИ из query-параметра `?uid=`,
+        # **только** если он в whitelist (см. ALLOW_UNSAFE_USER_IDS в
+        # .env). Query-параметр нужен потому, что некоторые WebView
+        # фильтруют кастомные заголовки.
+        unsafe_raw = (
+            request.headers.get("X-Telegram-User-Id-Unsafe", "")
+            or request.query.get("uid", "")
+        )
+        unsafe_source = (
+            "header" if request.headers.get("X-Telegram-User-Id-Unsafe")
+            else "query"
+        )
         if unsafe_raw.isdigit():
             unsafe_id = int(unsafe_raw)
             if unsafe_id in ALLOW_UNSAFE_USER_IDS:
                 user_id = unsafe_id
                 auth_mode = "unsafe-whitelist"
                 logger.warning(
-                    "Auth fallback: user_id=%d из whitelist (initData не передана)",
-                    user_id,
+                    "Auth fallback: user_id=%d из whitelist (источник=%s, initData не передана)",
+                    user_id, unsafe_source,
                 )
             else:
                 logger.warning(
-                    "Auth fallback отклонён: user_id=%d НЕ в whitelist (size=%d)",
-                    unsafe_id, len(ALLOW_UNSAFE_USER_IDS),
+                    "Auth fallback отклонён: user_id=%d НЕ в whitelist (source=%s, size=%d)",
+                    unsafe_id, unsafe_source, len(ALLOW_UNSAFE_USER_IDS),
                 )
         elif unsafe_raw:
-            logger.warning("X-Telegram-User-Id-Unsafe не число: %r", unsafe_raw[:50])
+            logger.warning("Unsafe id не число: %r (source=%s)",
+                           unsafe_raw[:50], unsafe_source)
         else:
             logger.warning(
-                "Auth провалился: ни initData, ни X-Telegram-User-Id-Unsafe не пришли. "
-                "UA=%r", request.headers.get("User-Agent", "")[:80],
+                "Auth провалился: ни initData, ни header/query unsafe не пришли. "
+                "UA=%r path=%s",
+                request.headers.get("User-Agent", "")[:80],
+                request.path,
             )
 
     if not user_id:

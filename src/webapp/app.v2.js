@@ -629,6 +629,13 @@ function setupBottomNav() {
 
 let historyLoaded = false;
 
+function getUnsafeUid() {
+    if (tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id) {
+        return String(tg.initDataUnsafe.user.id);
+    }
+    return null;
+}
+
 function apiHeaders() {
     // Mini App прокидывает Telegram initData — сервер проверяет HMAC
     // и достаёт user_id. На некоторых клиентах (Telegram Desktop под
@@ -639,12 +646,45 @@ function apiHeaders() {
         'X-Telegram-Init-Data': tg.initData || '',
         'Content-Type': 'application/json',
     };
-    const unsafeUid = tg.initDataUnsafe && tg.initDataUnsafe.user
-        ? tg.initDataUnsafe.user.id : null;
-    if (unsafeUid) {
-        headers['X-Telegram-User-Id-Unsafe'] = String(unsafeUid);
+    const uid = getUnsafeUid();
+    if (uid) {
+        headers['X-Telegram-User-Id-Unsafe'] = uid;
     }
     return headers;
+}
+
+// Дублируем uid в URL запроса как query-параметр — на случай, если
+// Telegram WebView фильтрует или режет кастомные заголовки. Сервер
+// принимает оба варианта.
+function withUid(url) {
+    const uid = getUnsafeUid();
+    if (!uid) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}uid=${encodeURIComponent(uid)}`;
+}
+
+// Одноразовая диагностика при первом 401 — пользователь увидит alert
+// со всеми ключевыми параметрами (user.id, длина initData, версия
+// Telegram), чтобы можно было прислать скрин в поддержку.
+let diagnosticsShown = false;
+function showAuthDiagnostics() {
+    if (diagnosticsShown) return;
+    diagnosticsShown = true;
+    const initLen = (tg.initData || '').length;
+    const uid = getUnsafeUid();
+    const userObj = tg.initDataUnsafe && tg.initDataUnsafe.user
+        ? JSON.stringify(tg.initDataUnsafe.user) : '(нет)';
+    const platform = tg.platform || '(нет)';
+    const version = tg.version || '(нет)';
+    const lines = [
+        'Диагностика авторизации:',
+        `• tg.initData длина: ${initLen}`,
+        `• tg.initDataUnsafe.user: ${userObj}`,
+        `• Получен ли uid: ${uid || 'НЕТ'}`,
+        `• Платформа: ${platform}`,
+        `• Версия Telegram WebApp: ${version}`,
+    ];
+    tg.showAlert(lines.join('\n'));
 }
 
 async function loadHistory(force = false) {
@@ -658,19 +698,22 @@ async function loadHistory(force = false) {
     listEl.innerHTML = '';
 
     try {
-        const resp = await fetch('/api/history?limit=50', {
+        const resp = await fetch(withUid('/api/history?limit=50'), {
             headers: apiHeaders(),
         });
         if (resp.status === 401) {
             const initLen = (tg.initData || '').length;
-            const uid = tg.initDataUnsafe && tg.initDataUnsafe.user
-                ? tg.initDataUnsafe.user.id : null;
+            const uid = getUnsafeUid();
             statusEl.innerHTML = (
                 'Не удалось проверить авторизацию Telegram.<br>' +
                 `<small>initData length: ${initLen}, user.id: ${uid || '—'}</small><br>` +
-                '<small>Если используете Telegram Desktop под Windows — initData может не передаваться. ' +
-                'Попробуйте мобильный клиент или сообщите user.id выше администратору, чтобы добавить вас в whitelist.</small>'
+                '<small>Нажмите кнопку «Подробная диагностика» и пришлите скриншот.</small>' +
+                '<br><br><button type="button" class="btn-mini" id="diag-btn">Подробная диагностика</button>'
             );
+            const diagBtn = document.getElementById('diag-btn');
+            if (diagBtn) diagBtn.addEventListener('click', () => {
+                diagnosticsShown = false; showAuthDiagnostics();
+            });
             return;
         }
         if (!resp.ok) {
@@ -737,7 +780,7 @@ async function onRunAction(runId, action, btn) {
     btn.textContent = '…';
     try {
         if (action === 'repush') {
-            const resp = await fetch(`/api/runs/${runId}/repush`, {
+            const resp = await fetch(withUid(`/api/runs/${runId}/repush`), {
                 method: 'POST',
                 headers: apiHeaders(),
             });
@@ -750,7 +793,7 @@ async function onRunAction(runId, action, btn) {
         } else if (action === 'xlsx') {
             // fetch с авторизацией (заголовок), но скачивание у Telegram-вебвью
             // ограничено — используем стандартный download через Blob.
-            const resp = await fetch(`/api/runs/${runId}/xlsx`, {
+            const resp = await fetch(withUid(`/api/runs/${runId}/xlsx`), {
                 headers: apiHeaders(),
             });
             if (!resp.ok) {
