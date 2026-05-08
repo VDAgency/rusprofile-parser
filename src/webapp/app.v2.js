@@ -636,31 +636,31 @@ function getUnsafeUid() {
     return null;
 }
 
-function apiHeaders() {
-    // Mini App прокидывает Telegram initData — сервер проверяет HMAC
-    // и достаёт user_id. На некоторых клиентах (Telegram Desktop под
-    // Windows) `tg.initData` пустая — добавляем заявленный user_id из
-    // `initDataUnsafe` как fallback. Сервер примет его только если
-    // user_id есть в whitelist (ALLOW_UNSAFE_USER_IDS).
-    const headers = {
-        'X-Telegram-Init-Data': tg.initData || '',
-        'Content-Type': 'application/json',
-    };
+// Передаём ВСЁ через query-параметры, без кастомных заголовков —
+// иначе Telegram WebView на части устройств блокирует запрос (CORS
+// preflight, плюс некоторые сборки режут кастомные заголовки до
+// отправки). Простой GET с query → запрос точно уходит.
+function apiUrl(path) {
+    const sep = path.includes('?') ? '&' : '?';
+    const params = [];
+    if (tg.initData) {
+        params.push('init_data=' + encodeURIComponent(tg.initData));
+    }
     const uid = getUnsafeUid();
     if (uid) {
-        headers['X-Telegram-User-Id-Unsafe'] = uid;
+        params.push('uid=' + encodeURIComponent(uid));
     }
-    return headers;
+    if (!params.length) return path;
+    return path + sep + params.join('&');
 }
 
-// Дублируем uid в URL запроса как query-параметр — на случай, если
-// Telegram WebView фильтрует или режет кастомные заголовки. Сервер
-// принимает оба варианта.
-function withUid(url) {
-    const uid = getUnsafeUid();
-    if (!uid) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}uid=${encodeURIComponent(uid)}`;
+// Без кастомных заголовков. Только Accept и максимально стандартный
+// fetch — никаких triggers для CORS preflight.
+function apiFetchOptions(extra) {
+    return Object.assign({
+        cache: 'no-store',
+        credentials: 'omit',
+    }, extra || {});
 }
 
 // Одноразовая диагностика при первом 401 — пользователь увидит alert
@@ -698,9 +698,7 @@ async function loadHistory(force = false) {
     listEl.innerHTML = '';
 
     try {
-        const resp = await fetch(withUid('/api/history?limit=50'), {
-            headers: apiHeaders(),
-        });
+        const resp = await fetch(apiUrl('/api/history?limit=50'), apiFetchOptions());
         if (resp.status === 401) {
             const initLen = (tg.initData || '').length;
             const uid = getUnsafeUid();
@@ -780,10 +778,10 @@ async function onRunAction(runId, action, btn) {
     btn.textContent = '…';
     try {
         if (action === 'repush') {
-            const resp = await fetch(withUid(`/api/runs/${runId}/repush`), {
-                method: 'POST',
-                headers: apiHeaders(),
-            });
+            const resp = await fetch(
+                apiUrl(`/api/runs/${runId}/repush`),
+                apiFetchOptions({ method: 'POST' }),
+            );
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) {
                 tg.showAlert(data.error || 'Не удалось перезалить.');
@@ -793,9 +791,10 @@ async function onRunAction(runId, action, btn) {
         } else if (action === 'xlsx') {
             // fetch с авторизацией (заголовок), но скачивание у Telegram-вебвью
             // ограничено — используем стандартный download через Blob.
-            const resp = await fetch(withUid(`/api/runs/${runId}/xlsx`), {
-                headers: apiHeaders(),
-            });
+            const resp = await fetch(
+                apiUrl(`/api/runs/${runId}/xlsx`),
+                apiFetchOptions(),
+            );
             if (!resp.ok) {
                 tg.showAlert('Ошибка экспорта Excel.');
                 return;

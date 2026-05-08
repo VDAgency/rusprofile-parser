@@ -55,7 +55,14 @@ async def auth_middleware(request: web.Request, handler: Callable):
     if request.path in ("/api/healthz", "/api/debug/me"):
         return await handler(request)
 
-    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    # Принимаем initData как из заголовка, так и из query-параметра
+    # `?init_data=...`. Telegram WebView на части устройств блокирует
+    # кастомные заголовки (приходит preflight на OPTIONS, а CORS
+    # отвергает) — поэтому фронт по умолчанию шлёт всё через query.
+    init_data = (
+        request.headers.get("X-Telegram-Init-Data", "")
+        or request.query.get("init_data", "")
+    )
     user_id = get_user_id(init_data)
     auth_mode = "initData"
 
@@ -119,8 +126,15 @@ async def auth_middleware(request: web.Request, handler: Callable):
 
 
 async def debug_me(request: web.Request) -> web.Response:
-    init_data = request.headers.get("X-Telegram-Init-Data", "")
-    unsafe_raw = request.headers.get("X-Telegram-User-Id-Unsafe", "")
+    # Принимаем оба источника — header или query.
+    init_data = (
+        request.headers.get("X-Telegram-Init-Data", "")
+        or request.query.get("init_data", "")
+    )
+    unsafe_raw = (
+        request.headers.get("X-Telegram-User-Id-Unsafe", "")
+        or request.query.get("uid", "")
+    )
     parsed = None
     try:
         from src.api.auth import parse_init_data
@@ -132,11 +146,13 @@ async def debug_me(request: web.Request) -> web.Response:
         "init_data_present": bool(init_data),
         "init_data_length": len(init_data),
         "init_data_valid": parsed is not None,
-        "unsafe_user_id_header": unsafe_raw or None,
+        "unsafe_user_id": unsafe_raw or None,
         "unsafe_user_id_in_whitelist": (
             unsafe_raw.isdigit() and int(unsafe_raw) in ALLOW_UNSAFE_USER_IDS
         ),
         "whitelist_size": len(ALLOW_UNSAFE_USER_IDS),
+        "origin": request.headers.get("Origin", ""),
+        "user_agent": request.headers.get("User-Agent", "")[:100],
     })
 
 
