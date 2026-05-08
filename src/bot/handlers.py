@@ -380,11 +380,20 @@ async def _run_yandex(
             )
             return
 
+        suffix = ""
+        if result.total_new < max_new:
+            suffix = (
+                "\n\n⚠️ Найдено меньше, чем запрошено — судя по выдаче Яндекс.Карт, "
+                "в этой теме больше нет новых организаций. Попробуйте уточнить "
+                "регион или категорию."
+            )
+
         await status_msg.edit_text(
             f"Готово! Яндекс.Карты:\n"
-            f"• Новых: {result.total_new}\n"
+            f"• Новых: {result.total_new} (запрошено {max_new})\n"
             f"• Пропущено дубликатов: {result.total_skipped}\n\n"
             f"Лист: {result.sheet_url}"
+            + suffix
         )
 
     except asyncio.CancelledError:

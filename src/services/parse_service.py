@@ -336,8 +336,12 @@ async def run_yandex(
         )
 
     error_message: str | None = None
-    new_places: list[YandexPlace] = []
+    persisted_places: list[YandexPlace] = []
     skipped = 0
+    seen_yandex_urls: set[str] = set()
+    seen_company_ids: set[int] = set()
+    source_exhausted = False
+    last_fetch_count = 0  # подсказка: «выдача исчерпана» в финальном сообщении
     try:
         proxy = _yandex_proxy_config()
         launch_kwargs = {"headless": True}
@@ -365,38 +369,43 @@ async def run_yandex(
                 async def yandex_progress(total, processed):
                     if progress_callback:
                         await progress_callback(
-                            f"Яндекс.Карты: найдено {processed} (в источнике ~{total})"
+                            f"Яндекс.Карты: найдено {len(persisted_places)}/"
+                            f"{max_new_clamped} новых, обработано {processed}"
                         )
 
-                # Итеративный добор: scrape_list умеет докручивать
-                # выдачу до max_places. Если первого захода (max_new*3)
-                # не хватило — запросим больше. Останавливаемся, когда
-                # набрали max_new_clamped новых ИЛИ выдача исчерпалась
-                # (scrape_list вернул меньше, чем мы запросили) ИЛИ
-                # упёрлись в верхний лимит.
-                seen_yandex_urls: set[str] = set()
-                source_exhausted = False
+                # Итеративный fetch + enrich + upsert ВНУТРИ цикла —
+                # потому что после enrich появляются телефоны, по
+                # которым только и виден настоящий дубликат с уже
+                # известными компаниями темы. Если набралось мало —
+                # запрашиваем больше карточек.
                 attempt = 0
                 hard_top = MAX_NEW_HARD_LIMIT * 2
-                while len(new_places) < max_new_clamped and not source_exhausted:
+                while (
+                    len(persisted_places) < max_new_clamped
+                    and not source_exhausted
+                ):
                     attempt += 1
                     fetch_limit = min(
                         max(max_new_clamped * 3 * attempt, 30),
                         hard_top,
                     )
+
                     places = await scrape_list(
                         context, region=region, category=category,
                         max_places=fetch_limit,
                         progress_callback=yandex_progress, logs_dir=LOG_DIR,
                     )
-                    # Если источник вернул меньше, чем мы попросили — он
-                    # действительно исчерпан, дальше пробовать бесполезно.
+                    last_fetch_count = len(places)
+
+                    # Источник исчерпан, если нам выдали меньше, чем
+                    # запросили (Яндекс реально докрутил выдачу до конца).
                     if len(places) < fetch_limit:
                         source_exhausted = True
 
-                    # Каждая итерация может выдать те же первые карточки —
-                    # отслеживаем их по yandex_url, чтобы не плодить
-                    # дубли между итерациями.
+                    # Шаг A: предварительный дедуп — выкидываем уже
+                    # виденные yandex_url (между итерациями) и
+                    # явные дубли по телефону (если он есть в выдаче).
+                    candidates: list[YandexPlace] = []
                     for p in places:
                         if p.yandex_url and p.yandex_url in seen_yandex_urls:
                             continue
@@ -404,31 +413,106 @@ async def run_yandex(
                             seen_yandex_urls.add(p.yandex_url)
 
                         phone_norm = normalize_phone(p.phone) if p.phone else None
-                        if is_duplicate(
-                            inn=None, ogrn=None,
-                            phone_normalized=phone_norm, known=known,
-                        ):
+                        if phone_norm and phone_norm in known.phone:
                             skipped += 1
                             continue
-                        new_places.append(p)
-                        if phone_norm:
-                            known.phone.add(phone_norm)
-                        if len(new_places) >= max_new_clamped:
+                        candidates.append(p)
+
+                    if not candidates:
+                        # На этой итерации новых yandex_url не нашли —
+                        # либо все уже виделись, либо выдача исчерпана.
+                        if attempt >= 4 or fetch_limit >= hard_top:
                             break
+                        continue
 
-                    # Защита от бесконечного добора
-                    if attempt >= 4 or fetch_limit >= hard_top:
-                        break
-
-                if new_places:
+                    # Шаг B: enrich телефонами/сайтами. Делаем для всего
+                    # batch'а, чтобы потом точно дедупнуть после появления
+                    # настоящих контактов.
                     if progress_callback:
                         await progress_callback(
-                            f"Найдено {len(new_places)} новых "
-                            f"(пропущено {skipped}). Собираю детали…"
+                            f"Найдено {len(persisted_places)}/{max_new_clamped} "
+                            f"новых. Уточняю детали ещё {len(candidates)} карточек…"
                         )
-                    new_places = await enrich_place_details(
-                        context, new_places, yandex_progress
+                    enriched = await enrich_place_details(
+                        context, candidates, yandex_progress,
                     )
+
+                    # Шаг C: upsert + точный дедуп по теме (после enrich).
+                    # Это то место, где раньше мы теряли часть кандидатов
+                    # незаметно для цикла.
+                    with get_session() as session:
+                        run_db = session.get(ParseRun, run_id)
+                        tenant_db = session.get(Tenant, tenant_id)
+
+                        for p in enriched:
+                            phone_norm = (
+                                normalize_phone(p.phone) if p.phone else None
+                            )
+                            # Опять проверяем по known.phone — телефон
+                            # мог появиться только сейчас.
+                            if phone_norm and phone_norm in known.phone:
+                                skipped += 1
+                                continue
+
+                            db_c, created = upsert_company(
+                                session, tenant_db,
+                                name=p.name, source=Source.YANDEX_MAPS.value,
+                                phone=p.phone or None,
+                                region=p.region or region,
+                                address=p.address or None,
+                                okved=p.categories or None,
+                                site=p.site or None,
+                                raw={
+                                    "rating": p.rating,
+                                    "reviews_count": p.reviews_count,
+                                    "hours": p.hours,
+                                    "coordinates": p.coordinates,
+                                    "yandex_url": p.yandex_url,
+                                },
+                            )
+
+                            if db_c.id in seen_company_ids:
+                                # В этом запуске уже привязали — общий
+                                # колл-центр сети.
+                                skipped += 1
+                                continue
+                            seen_company_ids.add(db_c.id)
+
+                            if not created:
+                                # Компания была в БД. Если она уже привязана
+                                # к этой теме каким-то прошлым запуском —
+                                # это дубль по теме.
+                                already_in_theme = session.scalar(
+                                    select(RunCompany.run_id)
+                                    .join(ParseRun, ParseRun.id == RunCompany.run_id)
+                                    .where(
+                                        ParseRun.theme_id == run_db.theme_id,
+                                        ParseRun.id != run_db.id,
+                                        RunCompany.company_id == db_c.id,
+                                        RunCompany.is_new == True,  # noqa: E712
+                                    )
+                                    .limit(1)
+                                )
+                                if already_in_theme is not None:
+                                    skipped += 1
+                                    continue
+
+                            session.add(RunCompany(
+                                run_id=run_db.id, company_id=db_c.id,
+                                is_new=True,
+                            ))
+                            persisted_places.append(p)
+                            if phone_norm:
+                                known.phone.add(phone_norm)
+
+                            if len(persisted_places) >= max_new_clamped:
+                                break
+
+                    # Защита от бесконечного добора — даже если по
+                    # каким-то причинам Яндекс отдаёт больше, чем нужно,
+                    # после 4 итераций или достижения hard_top останавливаемся.
+                    if attempt >= 4 or fetch_limit >= hard_top:
+                        break
 
                 await context.close()
             finally:
@@ -438,97 +522,26 @@ async def run_yandex(
         error_message = str(e)
 
     sheet_url: str | None = None
-    persisted_places: list[YandexPlace] = []
-
     with get_session() as session:
         run = session.get(ParseRun, run_id)
-        tenant = session.get(Tenant, tenant_id)
 
-        if error_message and not new_places:
+        if error_message and not persisted_places:
             run.status = RunStatus.ERROR.value
             run.error_message = error_message[:1000]
             run.finished_at = datetime.now(timezone.utc)
             return ParseResult(
                 run_id=run_id, total_new=0, total_skipped=skipped,
-                sheet_url=None, status=run.status, error_message=run.error_message,
+                sheet_url=None, status=run.status,
+                error_message=run.error_message,
             )
-
-        # После enrich у части карточек появился телефон, которого не
-        # было на этапе списочной выдачи. По нему делаем повторный
-        # дедуп — против ВСЕЙ темы (load_known_keys) и против
-        # текущего запуска (seen_company_ids). В run_companies
-        # записываем ТОЛЬКО реальных «новых для темы», иначе repush
-        # и xlsx будут отдавать лишнее.
-        seen_company_ids: set[int] = set()
-        for p in new_places:
-            phone_norm = normalize_phone(p.phone) if p.phone else None
-
-            # 1) Двойной дедуп по теме: телефон, появившийся после enrich,
-            # уже мог встречаться в этой теме (известен по другой
-            # карточке этого же запуска или по предыдущим запускам).
-            if phone_norm and phone_norm in known.phone:
-                # Если это от ТЕКУЩЕГО запуска (мы только что добавили),
-                # то seen_company_ids ниже отловит — отдельной ветки
-                # не нужно. Но для предыдущих запусков темы это
-                # настоящий дубликат — пропускаем.
-                # Проверка: phone был в known ДО текущего цикла?
-                # Для простоты: если seen_company_ids ещё не содержит
-                # компанию с этим телефоном, значит это от предыдущего
-                # запуска темы — реальный дубль.
-                pass  # обработаем ниже через seen_company_ids/upsert
-
-            db_c, created = upsert_company(
-                session, tenant,
-                name=p.name, source=Source.YANDEX_MAPS.value,
-                phone=p.phone or None, region=p.region or region,
-                address=p.address or None, okved=p.categories or None,
-                site=p.site or None,
-                raw={
-                    "rating": p.rating, "reviews_count": p.reviews_count,
-                    "hours": p.hours, "coordinates": p.coordinates,
-                    "yandex_url": p.yandex_url,
-                },
-            )
-
-            # 2) Несколько карточек одного запуска схлопнулись в одну
-            # компанию (общий телефон у сети, например).
-            if db_c.id in seen_company_ids:
-                skipped += 1
-                continue
-            seen_company_ids.add(db_c.id)
-
-            # 3) Если upsert вернул created=False — компания уже была
-            # в БД. Чтобы понять, появлялась ли она в ЭТОЙ теме раньше,
-            # смотрим, есть ли её запись в run_companies для других
-            # запусков той же темы. Если да — это дубль в теме,
-            # в run_companies НЕ пишем. Если нет — компания новая для
-            # темы (просто переиспользуем уже существующую запись
-            # company), пишем is_new=True.
-            if not created:
-                already_in_theme = session.scalar(
-                    select(RunCompany.run_id)
-                    .join(ParseRun, ParseRun.id == RunCompany.run_id)
-                    .where(
-                        ParseRun.theme_id == run.theme_id,
-                        ParseRun.id != run.id,
-                        RunCompany.company_id == db_c.id,
-                        RunCompany.is_new == True,  # noqa: E712
-                    )
-                    .limit(1)
-                )
-                if already_in_theme is not None:
-                    skipped += 1
-                    continue
-
-            session.add(RunCompany(
-                run_id=run.id, company_id=db_c.id, is_new=True,
-            ))
-            persisted_places.append(p)
 
         run.total_new = len(persisted_places)
         run.total_skipped = skipped
+        run.total_found_in_source = last_fetch_count
         run.finished_at = datetime.now(timezone.utc)
-        run.status = RunStatus.DONE.value if not error_message else RunStatus.ERROR.value
+        run.status = (
+            RunStatus.DONE.value if not error_message else RunStatus.ERROR.value
+        )
         if error_message:
             run.error_message = error_message[:1000]
 
