@@ -529,6 +529,13 @@ function updateValidation() {
 // Сабмит
 // =====================================================================
 
+function clampMaxNew(raw) {
+    const n = parseInt(raw, 10);
+    if (!n || n < 1) return 100;
+    if (n > 300) return 300;
+    return n;
+}
+
 function getFormData() {
     const region = val('region');
     return {
@@ -552,6 +559,7 @@ function getFormData() {
         has_emails: checked('has_emails'),
         finance_has_actual_year_data: checked('finance_has_actual_year_data'),
         not_defendant: checked('not_defendant'),
+        max_new: clampMaxNew(val('max_new')),
     };
 }
 
@@ -570,7 +578,7 @@ function submitYandexForm(e) {
     e.preventDefault();
     const region = val('yandex_region');
     const category = val('yandex_category');
-    const maxPlaces = val('yandex_max_places');
+    const maxNew = clampMaxNew(val('yandex_max_new'));
 
     if (!region) {
         tg.showAlert('Выберите регион.');
@@ -585,8 +593,8 @@ function submitYandexForm(e) {
         source: 'yandex_maps',
         region: region,
         category: category,
+        max_new: maxNew,
     };
-    if (maxPlaces) payload.max_places = maxPlaces;
 
     tg.sendData(JSON.stringify(payload));
 }
