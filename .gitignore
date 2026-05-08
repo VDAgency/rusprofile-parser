@@ -19,6 +19,12 @@ logs/*.html
 config/credentials.json
 config/cookies.json
 
+# Local DB (SQLite)
+data/parser.db
+data/parser.db-journal
+data/parser.db-wal
+data/parser.db-shm
+
 # Claude Code локальные настройки (могут содержать секреты)
 .claude/settings.local.json
 

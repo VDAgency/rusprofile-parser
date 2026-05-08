@@ -30,6 +30,23 @@ GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+# База данных. По умолчанию SQLite-файл в data/. На SaaS-этапе
+# переедем на PostgreSQL — для этого подменим DATABASE_URL в .env.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    f"sqlite:///{(BASE_DIR / 'data' / 'parser.db').as_posix()}",
+)
+
+# HTTP API (Mini App история, Excel-экспорт). Поднимаем aiohttp в том
+# же процессе, что и aiogram-бот; Nginx проксирует /api/ сюда.
+API_HOST = os.getenv("API_HOST", "127.0.0.1")
+API_PORT = int(os.getenv("API_PORT", "8080"))
+
+# Лимит «новых» компаний за один запуск парсинга — общий для всех
+# источников. UI ограничивает выбором 1..MAX_NEW_HARD_LIMIT.
+DEFAULT_MAX_NEW = 100
+MAX_NEW_HARD_LIMIT = 300
+
 # Парсинг
 REQUEST_DELAY_MIN = 2  # мин. задержка между запросами (сек)
 REQUEST_DELAY_MAX = 5  # макс. задержка
