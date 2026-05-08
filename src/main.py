@@ -89,7 +89,8 @@ async def main():
 
     # HTTP API для Mini App (история, re-export, Excel) живёт в том же
     # процессе. Nginx проксирует /api/ → 127.0.0.1:API_PORT.
-    api_runner = await start_api_server()
+    # Передаём bot — для отправки .xlsx прямо в чат пользователя.
+    api_runner = await start_api_server(bot=bot)
 
     try:
         await dp.start_polling(bot)

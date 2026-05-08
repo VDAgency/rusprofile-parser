@@ -15,7 +15,7 @@ import asyncio
 import sys
 from playwright.async_api import async_playwright
 
-URL = "https://parserclients.ru/app/"
+URL = "https://parserclients.ru/app/?uid=5389520473"
 
 
 async def main():

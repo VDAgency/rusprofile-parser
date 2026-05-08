@@ -20,6 +20,9 @@ from typing import Awaitable, Callable
 from aiohttp import web
 from sqlalchemy import select
 
+from aiogram import Bot
+from aiogram.types import BufferedInputFile
+
 from src.api.auth import get_user_id, get_username
 from src.api.export_xlsx import export_run_to_xlsx
 from src.config import (
@@ -308,6 +311,10 @@ async def repush_to_sheets(request: web.Request) -> web.Response:
 
 
 async def download_xlsx(request: web.Request) -> web.Response:
+    """Прямое скачивание Excel — для curl/браузера. Mini App не использует
+    этот путь, потому что Telegram WebView блокирует binary download через
+    `<a download>`. См. send_xlsx_to_chat.
+    """
     user_id = request["user_id"]
     try:
         run_id = int(request.match_info["run_id"])
@@ -339,26 +346,91 @@ async def download_xlsx(request: web.Request) -> web.Response:
     )
 
 
+async def send_xlsx_to_chat(request: web.Request) -> web.Response:
+    """Генерирует Excel и отправляет файлом прямо в чат пользователя.
+
+    Telegram WebView не умеет скачивать application/octet-stream через
+    `<a download>` — JS падает на blob или не открывает диалог. Поэтому
+    Mini App просит сервер отправить файл документом в чат через бота;
+    пользователь увидит файл сообщением и сможет его открыть/скачать
+    стандартным Telegram-способом.
+    """
+    user_id = request["user_id"]
+    try:
+        run_id = int(request.match_info["run_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "bad run_id"}, status=400)
+
+    bot: Bot | None = request.app.get("bot")
+    if bot is None:
+        return web.json_response(
+            {"error": "bot is not configured on the API server"},
+            status=500,
+        )
+
+    with get_session() as session:
+        tenant = _tenant_by_user(session, user_id)
+        if not tenant:
+            return web.json_response({"error": "no tenant"}, status=404)
+        run = session.get(ParseRun, run_id)
+        if not run or run.tenant_id != tenant.id:
+            return web.json_response({"error": "run not found"}, status=404)
+
+        try:
+            data, filename = export_run_to_xlsx(session, run_id)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=404)
+
+    try:
+        await bot.send_document(
+            chat_id=user_id,
+            document=BufferedInputFile(data, filename=filename),
+            caption=(
+                f"Запуск №{run_id}: {run.total_new} компаний "
+                if False else f"Excel-файл по запуску №{run_id}"
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("send_document failed")
+        return web.json_response(
+            {"error": "telegram_send_failed", "detail": str(e)[:200]},
+            status=502,
+        )
+
+    return web.json_response({
+        "ok": True,
+        "filename": filename,
+        "size": len(data),
+        "message": "Файл отправлен в чат с ботом",
+    })
+
+
 # ---------------------------------------------------------------------------
 # Сборка приложения
 # ---------------------------------------------------------------------------
 
 
-def build_app() -> web.Application:
+def build_app(bot: Bot | None = None) -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
+    if bot is not None:
+        app["bot"] = bot
     app.router.add_get("/api/healthz", healthz)
     app.router.add_get("/api/debug/me", debug_me)
     app.router.add_get("/api/history", history)
     app.router.add_post("/api/runs/{run_id}/repush", repush_to_sheets)
     app.router.add_get("/api/runs/{run_id}/xlsx", download_xlsx)
+    app.router.add_post("/api/runs/{run_id}/send-xlsx", send_xlsx_to_chat)
     return app
 
 
-async def start_api_server() -> web.AppRunner:
+async def start_api_server(bot: Bot | None = None) -> web.AppRunner:
     """Запускает aiohttp-сервер. Возвращает runner — его надо не забыть
     закрыть при остановке.
+
+    ``bot`` — экземпляр aiogram-бота для отправки документов в чат
+    (используется в /api/runs/{id}/send-xlsx).
     """
-    app = build_app()
+    app = build_app(bot=bot)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, API_HOST, API_PORT)

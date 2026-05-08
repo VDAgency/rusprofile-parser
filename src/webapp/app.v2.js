@@ -803,29 +803,27 @@ async function onRunAction(runId, action, btn) {
             }
             tg.showAlert(`Готово. Перезаписано ${data.exported} компаний в Sheets.`);
         } else if (action === 'xlsx') {
-            // fetch с авторизацией (заголовок), но скачивание у Telegram-вебвью
-            // ограничено — используем стандартный download через Blob.
+            // Telegram WebView не умеет скачивать binary через <a download>.
+            // Просим сервер отправить файл напрямую сообщением в чат —
+            // пользователь получит документ через бота и Telegram сам
+            // даст стандартные кнопки «Открыть / Сохранить».
             const resp = await fetch(
-                apiUrl(`/api/runs/${runId}/xlsx`),
-                apiFetchOptions(),
+                apiUrl(`/api/runs/${runId}/send-xlsx`),
+                apiFetchOptions({ method: 'POST' }),
             );
+            const data = await resp.json().catch(() => ({}));
             if (!resp.ok) {
-                tg.showAlert('Ошибка экспорта Excel.');
+                tg.showAlert(data.error || 'Не удалось отправить Excel.');
                 return;
             }
-            const blob = await resp.blob();
-            const cd = resp.headers.get('Content-Disposition') || '';
-            const fnameMatch = cd.match(/filename="?([^"]+)"?/);
-            const fname = fnameMatch ? fnameMatch[1] : `run_${runId}.xlsx`;
-
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fname;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            tg.showAlert(
+                'Excel-файл отправлен сообщением в чат с ботом — '
+                + 'откройте чат, чтобы скачать.'
+            );
+            // Закрыть Mini App, чтобы пользователь сразу увидел файл
+            // в чате. Если закрытие нежелательно (он хочет ещё что-то
+            // сделать в истории), можно убрать.
+            // tg.close();
         }
     } catch (err) {
         console.error(err);
