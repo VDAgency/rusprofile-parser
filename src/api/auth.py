@@ -29,9 +29,11 @@ def parse_init_data(init_data: str) -> dict | None:
     """Проверяет подпись initData и возвращает словарь полей.
 
     Возвращает None, если подпись неверна, истёк срок действия или
-    данные битые.
+    данные битые. Подробная причина логируется в WARNING — без
+    самого hash, чтобы не утекало в логи.
     """
     if not init_data:
+        logger.warning("initData отсутствует")
         return None
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN пустой — initData проверить нечем")
@@ -39,23 +41,35 @@ def parse_init_data(init_data: str) -> dict | None:
 
     try:
         pairs = dict(parse_qsl(init_data, keep_blank_values=True))
-    except Exception:
+    except Exception as e:
+        logger.warning("initData parse_qsl упал: %s", e)
         return None
 
     received_hash = pairs.pop("hash", None)
     if not received_hash:
+        logger.warning(
+            "initData без поля hash. Полученные ключи: %s", sorted(pairs.keys())
+        )
         return None
+
+    # Telegram с весны 2024 добавил поле `signature` — оно для
+    # third-party валидации (Ed25519 подпись от Telegram), и в
+    # HMAC-проверке его НЕ учитывают. Исключаем так же, как hash.
+    pairs.pop("signature", None)
 
     # auth_date — unix timestamp в строке
     auth_date_raw = pairs.get("auth_date")
     try:
         auth_date = int(auth_date_raw) if auth_date_raw is not None else 0
     except ValueError:
+        logger.warning("initData auth_date не int: %r", auth_date_raw)
         return None
     if auth_date <= 0:
+        logger.warning("initData без корректного auth_date")
         return None
-    if time.time() - auth_date > INIT_DATA_TTL_SECONDS:
-        logger.warning("initData просрочен (auth_date %s)", auth_date)
+    age = time.time() - auth_date
+    if age > INIT_DATA_TTL_SECONDS:
+        logger.warning("initData просрочен (age=%.0fs > %ds)", age, INIT_DATA_TTL_SECONDS)
         return None
 
     data_check = "\n".join(
@@ -69,7 +83,10 @@ def parse_init_data(init_data: str) -> dict | None:
     ).hexdigest()
 
     if not hmac.compare_digest(expected, received_hash):
-        logger.warning("initData hash mismatch")
+        logger.warning(
+            "initData hash mismatch. Ключи в data_check: %s; age=%.0fs",
+            sorted(pairs.keys()), age,
+        )
         return None
 
     # Распаковываем user из JSON, если есть.

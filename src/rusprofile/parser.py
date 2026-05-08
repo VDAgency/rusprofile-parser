@@ -310,11 +310,39 @@ _SUBMIT_JS = """() => {
 }"""
 
 
+async def _save_diag_dump(page: Page, label: str) -> None:
+    """Сохраняет скриншот и HTML текущей страницы в logs/diag/.
+
+    Помогает понять, что Rusprofile отдал вместо формы (капча,
+    rate-limit-страница, редирект на логин и т. п.).
+    """
+    try:
+        from src.config import LOG_DIR
+        diag_dir = LOG_DIR / "diag"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        png = diag_dir / f"{label}_{ts}.png"
+        html = diag_dir / f"{label}_{ts}.html"
+        try:
+            await page.screenshot(path=str(png), full_page=False, timeout=5000)
+        except Exception:
+            pass
+        try:
+            content = await page.content()
+            html.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
+        logger.warning("Диагностика сохранена: %s", diag_dir)
+    except Exception as e:
+        logger.debug("Не удалось сохранить диагностику: %s", e)
+
+
 async def _fetch_page_json(
     page: Page,
     overrides: dict,
     responses: list,
     max_wait_sec: int = 20,
+    attempt: int = 1,
 ) -> Optional[dict]:
     """Открывает /search-advanced, сабмитит форму и возвращает JSON-ответ API.
 
@@ -322,6 +350,10 @@ async def _fetch_page_json(
     страницы (включая ``page``). Route-handler в ``parse_search_results``
     читает ``overrides`` через замыкание; здесь мы только обновляем его
     и сабмитим форму.
+
+    При неудаче с не-отрисовкой формы делает один дополнительный заход
+    с увеличенным таймаутом — Rusprofile периодически зависает на
+    первой загрузке страницы, второй goto обычно удаётся.
     """
     try:
         await _goto(page, SEARCH_URL, timeout=45000)
@@ -329,10 +361,24 @@ async def _fetch_page_json(
         logger.warning("Не смог открыть форму поиска: %s", e)
         return None
 
+    # Первая попытка — короткий таймаут, при retry — длинный.
+    selector_timeout = 20000 if attempt == 1 else 60000
     try:
-        await page.wait_for_selector("#state-1", state="attached", timeout=20000)
+        await page.wait_for_selector(
+            "#state-1", state="attached", timeout=selector_timeout
+        )
     except Exception:
-        logger.warning("Форма поиска не отрисовалась (нет #state-1)")
+        logger.warning(
+            "Форма поиска не отрисовалась (нет #state-1, попытка %d, timeout=%dms)",
+            attempt, selector_timeout,
+        )
+        if attempt == 1:
+            await _save_diag_dump(page, "no_form_attempt1")
+            await page.wait_for_timeout(3000)
+            return await _fetch_page_json(
+                page, overrides, responses, max_wait_sec, attempt=2,
+            )
+        await _save_diag_dump(page, "no_form_attempt2_final")
         return None
 
     await page.wait_for_timeout(1500)

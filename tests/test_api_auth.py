@@ -71,3 +71,14 @@ def test_expired_init_data_rejected(patched_token):
 def test_empty_init_data_rejected(patched_token):
     assert patched_token.get_user_id("") is None
     assert patched_token.get_user_id(None) is None
+
+
+def test_signature_field_does_not_break_hmac(patched_token):
+    """Telegram с 2024 добавил в initData поле `signature` (Ed25519,
+    для third-party валидации). Оно НЕ участвует в HMAC-проверке
+    хеша — иначе валидные initData с современных клиентов отвергаются.
+    """
+    init = _build_init_data(user_id=42, username="vasya")
+    # Эмулируем то, что добавляет современный Telegram-клиент.
+    tampered = init + "&signature=Ed25519FakeSignature_payload-here"
+    assert patched_token.get_user_id(tampered) == 42
