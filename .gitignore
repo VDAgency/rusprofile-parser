@@ -27,6 +27,8 @@ data/parser.db-shm
 
 # Claude Code локальные настройки (могут содержать секреты)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/
 
 # IDE
 .vscode/
