@@ -357,8 +357,21 @@ async def parse_search_results(
     context: BrowserContext,
     filters: SearchFilters,
     progress_callback=None,
+    is_new_predicate=None,
+    max_new: Optional[int] = None,
 ) -> list[Company]:
     """Парсит результаты поиска компаний с пагинацией.
+
+    Args:
+        is_new_predicate: callable(Company) -> bool. Если задан, парсер
+            считает «новыми» только те компании, для которых предикат
+            вернул True; по достижении ``max_new`` новых — останавливается.
+            Если None — поведение прежнее (все собранные считаются новыми).
+        max_new: лимит новых компаний. None = без лимита (старое поведение,
+            ограничено только ``MAX_PAGES``).
+
+    Возвращает только «новые» компании (то есть для которых
+    ``is_new_predicate`` вернул True). Если предикат не задан — все.
 
     Схема:
     1. Открываем /search-advanced, Vue-форма подгружает свежий X-CSRF-Token.
@@ -440,7 +453,10 @@ async def parse_search_results(
                 logger.info("Пусто на странице %d — конец выдачи", current_page)
                 break
 
-            new_on_page = 0
+            new_on_page = 0      # «новых» (по предикату или просто свежих) на этой странице
+            page_added = 0       # сколько добавилось в `companies` на этой странице
+            page_skipped_dup = 0  # сколько отбросил пользовательский предикат
+            stop_by_limit = False
             for item in result_items:
                 company = _company_from_json(item)
                 if not company:
@@ -449,8 +465,21 @@ async def parse_search_results(
                     continue
                 if company.inn:
                     seen_inn.add(company.inn)
+
+                # Если задан предикат «новая ли это компания» — фильтруем.
+                # Те, которые предикат отверг, не идут в `companies`, но
+                # учитываются как «обработанные» — иначе цикл не сдвинется.
+                if is_new_predicate is not None and not is_new_predicate(company):
+                    page_skipped_dup += 1
+                    continue
+
                 companies.append(company)
+                page_added += 1
                 new_on_page += 1
+
+                if max_new is not None and len(companies) >= max_new:
+                    stop_by_limit = True
+                    break
 
             if progress_callback:
                 await progress_callback(
@@ -458,12 +487,20 @@ async def parse_search_results(
                 )
 
             logger.info(
-                "Стр %d: в ответе %d записей, новых %d, всего собрано %d",
-                current_page, len(result_items), new_on_page, len(companies),
+                "Стр %d: в ответе %d, добавлено %d, отброшено-предикатом %d, всего %d",
+                current_page, len(result_items), page_added, page_skipped_dup,
+                len(companies),
             )
 
+            if stop_by_limit:
+                logger.info("Достигнут лимит max_new=%d — стоп", max_new)
+                break
+
             # Стоп-условия
-            if new_on_page == 0:
+            # «Новых» в смысле «не был в seen_inn». Если за всю страницу
+            # не появилось ни одной свежей карточки — Rusprofile вернул
+            # тот же набор, дальше идти бесполезно.
+            if page_added == 0 and page_skipped_dup == 0:
                 logger.info("Нет новых карточек — стоп")
                 break
             if total_found and len(companies) >= total_found:

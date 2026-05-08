@@ -12,21 +12,16 @@ from aiogram.types import (
     WebAppInfo,
 )
 from aiogram.filters import CommandStart, Command
-from playwright.async_api import async_playwright
 
 from src.config import (
+    DEFAULT_MAX_NEW,
+    MAX_NEW_HARD_LIMIT,
     TELEGRAM_WEBAPP_URL,
-    GOOGLE_SHEET_ID,
-    YANDEX_SHEET_HEADERS,
-    YANDEX_SHEET_NAME,
-    YANDEX_MAX_PLACES,
 )
-from src.rusprofile.auth import get_authenticated_context
-from src.rusprofile.parser import parse_search_results, enrich_company_details, Company
 from src.rusprofile.filters import SearchFilters
-from src.sheets.client import write_companies, get_sheet_url
-from src.yandex_maps.runner import parse_yandex
+from src.sheets.client import get_sheet_url
 from src.okved.search import filter_codes_in_handbook
+from src.services.parse_service import run_rusprofile, run_yandex
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -152,17 +147,14 @@ async def cmd_search(message: Message):
 
     await message.answer(f"Ищу: {query}...")
     filters = SearchFilters(query=query)
-    task = asyncio.create_task(_run_parsing(message, filters))
+    raw = {"query": query}
+    task = asyncio.create_task(_run_rusprofile(message, filters, raw, max_new=10))
     _active_tasks[user_id] = task
 
 
 @router.message(F.web_app_data)
 async def handle_webapp_data(message: Message):
-    """Обработка данных из Mini App.
-
-    Mini App отправляет поле ``source`` со значением ``"rusprofile"`` или
-    ``"yandex_maps"``. По нему диспатчим в соответствующий парсер.
-    """
+    """Обработка данных из Mini App."""
     try:
         data = json.loads(message.web_app_data.data)
         logger.info("Получены данные из Mini App: %s", data)
@@ -175,6 +167,7 @@ async def handle_webapp_data(message: Message):
             return
 
         source = data.get("source", "rusprofile")
+        max_new = _clamp_max_new(_parse_int(data.get("max_new")))
 
         if source == "yandex_maps":
             region = (data.get("region") or "").strip()
@@ -184,30 +177,27 @@ async def handle_webapp_data(message: Message):
                     "Для парсинга Яндекс Карт укажите и регион, и вид деятельности."
                 )
                 return
-            max_places = _parse_int(data.get("max_places")) or YANDEX_MAX_PLACES
 
             await message.answer(
-                f"Ищу «{category}» в регионе «{region}» на Яндекс Картах..."
+                f"Ищу «{category}» в регионе «{region}» на Яндекс Картах "
+                f"(до {max_new} новых)..."
             )
             task = asyncio.create_task(
-                _run_yandex_parsing(message, region, category, max_places)
+                _run_yandex(message, region, category, max_new)
             )
             _active_tasks[user_id] = task
             return
 
         # Mini App присылает okved_strict явным булевым значением:
         # true (по умолчанию) — искать только по основному ОКВЭД компании,
-        # false — также по дополнительным ОКВЭД. Если ключа нет
-        # (старый клиент) — оставляем None, чтобы filters.py применил
-        # своё дефолтное поведение (strict=True при наличии кодов).
+        # false — также по дополнительным ОКВЭД.
         okved_strict_raw = data.get("okved_strict")
+        okved_strict_value: bool | None
         if okved_strict_raw is None:
-            okved_strict_value: bool | None = None
+            okved_strict_value = None
         else:
             okved_strict_value = bool(okved_strict_raw)
 
-        # Отфильтровываем мусорные коды — Mini App может прислать всё что
-        # угодно, на бэкенде валидируем по справочнику data/okved/.
         okved_codes = filter_codes_in_handbook(_as_list(data.get("okved")))
 
         filters = SearchFilters(
@@ -217,7 +207,7 @@ async def handle_webapp_data(message: Message):
             okved_strict=okved_strict_value,
             okopf=_as_list(data.get("okopf")),
             msp=_as_list(data.get("msp")),
-            status=_as_list(data.get("status")) or ["1"],  # по умолчанию «Действующая»
+            status=_as_list(data.get("status")) or ["1"],
             finance_revenue_from=_parse_int(data.get("finance_revenue_from")),
             finance_revenue_to=_parse_int(data.get("finance_revenue_to")),
             finance_profit_from=_parse_int(data.get("finance_profit_from")),
@@ -233,8 +223,37 @@ async def handle_webapp_data(message: Message):
             not_defendant=bool(data.get("not_defendant")),
         )
 
-        await message.answer("Запускаю парсинг с заданными фильтрами...")
-        task = asyncio.create_task(_run_parsing(message, filters))
+        # Сохраняем «сырые» фильтры для генерации темы — их хеш должен
+        # совпадать у одинаковых запусков (Mini App шлёт detrministic).
+        raw_filters = {
+            "query": data.get("query") or None,
+            "region": _as_list(data.get("region")),
+            "okved": okved_codes,
+            "okved_strict": okved_strict_value,
+            "okopf": _as_list(data.get("okopf")),
+            "msp": _as_list(data.get("msp")),
+            "status": _as_list(data.get("status")) or ["1"],
+            "finance_revenue_from": _parse_int(data.get("finance_revenue_from")),
+            "finance_revenue_to": _parse_int(data.get("finance_revenue_to")),
+            "finance_profit_from": _parse_int(data.get("finance_profit_from")),
+            "finance_profit_to": _parse_int(data.get("finance_profit_to")),
+            "capital_from": _parse_int(data.get("capital_from")),
+            "capital_to": _parse_int(data.get("capital_to")),
+            "sshr_from": _parse_int(data.get("sshr_from")),
+            "sshr_to": _parse_int(data.get("sshr_to")),
+            "has_phones": bool(data.get("has_phones")),
+            "has_emails": bool(data.get("has_emails")),
+            "has_sites": bool(data.get("has_sites")),
+            "finance_has_actual_year_data": bool(data.get("finance_has_actual_year_data")),
+            "not_defendant": bool(data.get("not_defendant")),
+        }
+
+        await message.answer(
+            f"Запускаю парсинг (лимит — {max_new} новых компаний)..."
+        )
+        task = asyncio.create_task(
+            _run_rusprofile(message, filters, raw_filters, max_new)
+        )
         _active_tasks[user_id] = task
 
     except json.JSONDecodeError:
@@ -244,117 +263,120 @@ async def handle_webapp_data(message: Message):
         await message.answer(f"Произошла ошибка: {e}")
 
 
-async def _run_parsing(message: Message, filters: SearchFilters):
-    """Запускает процесс парсинга и отправляет результаты."""
+async def _run_rusprofile(
+    message: Message,
+    filters: SearchFilters,
+    filters_for_theme: dict,
+    max_new: int,
+):
+    """Запускает Rusprofile-парсинг через сервис."""
     status_msg = await message.answer("Подключаюсь к Rusprofile...")
 
+    async def progress(text: str):
+        try:
+            await status_msg.edit_text(text)
+        except Exception:
+            pass
+
     try:
-        async with async_playwright() as pw:
-            context = await get_authenticated_context(pw)
+        result = await run_rusprofile(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            filters=filters,
+            filters_for_theme=filters_for_theme,
+            max_new=max_new,
+            progress_callback=progress,
+        )
 
-            async def on_progress(total: int, processed: int):
-                try:
-                    await status_msg.edit_text(
-                        f"Парсинг...\n"
-                        f"Найдено: {total} компаний\n"
-                        f"Обработано: {processed}"
-                    )
-                except Exception:
-                    pass  # Telegram может ограничить частоту редактирования
-
-            await status_msg.edit_text("Ищу компании по заданным фильтрам...")
-            companies = await parse_search_results(context, filters, on_progress)
-
-            if not companies:
-                await status_msg.edit_text(
-                    "Компании не найдены. Попробуйте изменить фильтры."
-                )
-                await context.browser.close()
-                return
-
+        if result.status == "error":
             await status_msg.edit_text(
-                f"Найдено {len(companies)} компаний. Собираю контактные данные..."
+                f"Ошибка парсинга: {result.error_message}"
             )
-            companies = await enrich_company_details(context, companies, on_progress)
+            return
 
-            await context.browser.close()
-
-        await status_msg.edit_text("Выгружаю результаты в Google Sheets...")
-        sheet_url = write_companies(companies, replace=True)
+        if result.total_new == 0:
+            await status_msg.edit_text(
+                "Новых компаний не найдено — все совпадения уже были в базе.\n"
+                f"Пропущено дубликатов: {result.total_skipped}\n\n"
+                "Откройте «История» в Mini App, чтобы заново выгрузить "
+                "ранее найденные компании."
+            )
+            return
 
         await status_msg.edit_text(
-            f"Готово! Найдено {len(companies)} компаний.\n\n"
-            f"Результаты в Google Sheets:\n{sheet_url}"
+            f"Готово!\n"
+            f"• Новых компаний: {result.total_new}\n"
+            f"• Пропущено дубликатов: {result.total_skipped}\n\n"
+            f"Таблица: {result.sheet_url}"
         )
 
     except asyncio.CancelledError:
         await status_msg.edit_text("Парсинг отменён.")
     except Exception as e:
-        logger.error("Ошибка парсинга: %s", e)
+        logger.exception("Ошибка _run_rusprofile")
         await status_msg.edit_text(f"Ошибка парсинга: {e}")
     finally:
         user_id = message.from_user.id
         _active_tasks.pop(user_id, None)
 
 
-async def _run_yandex_parsing(
+async def _run_yandex(
     message: Message,
     region: str,
     category: str,
-    max_places: int,
+    max_new: int,
 ):
-    """Запускает парсинг Яндекс Карт и выгружает результат в Google Sheets."""
+    """Запускает Яндекс.Карты-парсинг через сервис."""
     status_msg = await message.answer("Подключаюсь к Яндекс Картам...")
 
-    try:
-        async def on_progress(total: int, processed: int):
-            try:
-                await status_msg.edit_text(
-                    f"Яндекс Карты: найдено {total}, обработано {processed}..."
-                )
-            except Exception:
-                pass  # Telegram ограничивает частоту edit_text
+    async def progress(text: str):
+        try:
+            await status_msg.edit_text(text)
+        except Exception:
+            pass
 
-        await status_msg.edit_text(
-            f"Ищу «{category}» в «{region}» на Яндекс Картах..."
-        )
-        places = await parse_yandex(
+    try:
+        result = await run_yandex(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
             region=region,
             category=category,
-            max_places=max_places,
-            progress_callback=on_progress,
-            with_details=True,
+            max_new=max_new,
+            progress_callback=progress,
         )
 
-        if not places:
+        if result.status == "error":
+            await status_msg.edit_text(f"Ошибка: {result.error_message}")
+            return
+
+        if result.total_new == 0:
             await status_msg.edit_text(
-                "Ничего не найдено. Проверьте регион и рубрику или попробуйте позже."
+                "Новых организаций не найдено — все уже были в базе.\n"
+                f"Пропущено дубликатов: {result.total_skipped}"
             )
             return
 
         await status_msg.edit_text(
-            f"Найдено {len(places)} организаций. Выгружаю в Google Sheets..."
-        )
-        sheet_url = write_companies(
-            places,
-            sheet_name=YANDEX_SHEET_NAME,
-            headers=YANDEX_SHEET_HEADERS,
-            replace=True,
-        )
-
-        await status_msg.edit_text(
-            f"Готово! Яндекс Карты — {len(places)} организаций.\n\n"
-            f"Лист «{YANDEX_SHEET_NAME}»:\n{sheet_url}"
+            f"Готово! Яндекс.Карты:\n"
+            f"• Новых: {result.total_new}\n"
+            f"• Пропущено дубликатов: {result.total_skipped}\n\n"
+            f"Лист: {result.sheet_url}"
         )
 
     except asyncio.CancelledError:
         await status_msg.edit_text("Парсинг отменён.")
     except Exception as e:
-        logger.error("Ошибка парсинга Яндекс Карт: %s", e)
+        logger.exception("Ошибка _run_yandex")
         await status_msg.edit_text(f"Ошибка: {e}")
     finally:
         user_id = message.from_user.id
         _active_tasks.pop(user_id, None)
+
+
+def _clamp_max_new(value: int | None) -> int:
+    if not value or value <= 0:
+        return DEFAULT_MAX_NEW
+    return min(int(value), MAX_NEW_HARD_LIMIT)
 
 
 def _parse_int(value) -> int | None:
@@ -368,11 +390,7 @@ def _parse_int(value) -> int | None:
 
 
 def _as_list(value) -> list[str]:
-    """Нормализует значение от Mini App в список строк.
-
-    Mini App может прислать None, одиночное значение или массив —
-    внутренне мы всегда работаем со списком (поля-виджеты Rusprofile).
-    """
+    """Нормализует значение от Mini App в список строк."""
     if value is None or value == "":
         return []
     if isinstance(value, list):
