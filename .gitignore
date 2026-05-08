@@ -37,3 +37,4 @@ data/parser.db-shm
 # OS
 .DS_Store
 Thumbs.db
+nginx-parserclients.conf

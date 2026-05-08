@@ -76,6 +76,18 @@ async def auth_middleware(request: web.Request, handler: Callable):
                     "Auth fallback: user_id=%d из whitelist (initData не передана)",
                     user_id,
                 )
+            else:
+                logger.warning(
+                    "Auth fallback отклонён: user_id=%d НЕ в whitelist (size=%d)",
+                    unsafe_id, len(ALLOW_UNSAFE_USER_IDS),
+                )
+        elif unsafe_raw:
+            logger.warning("X-Telegram-User-Id-Unsafe не число: %r", unsafe_raw[:50])
+        else:
+            logger.warning(
+                "Auth провалился: ни initData, ни X-Telegram-User-Id-Unsafe не пришли. "
+                "UA=%r", request.headers.get("User-Agent", "")[:80],
+            )
 
     if not user_id:
         return web.json_response(

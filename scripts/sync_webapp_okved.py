@@ -1,20 +1,27 @@
-"""Синхронизирует справочник ОКВЭД для Mini App.
+"""Синхронизирует справочник ОКВЭД и подменяет cache-busting токен в Mini App.
 
 Mini App — статичный фронт в ``src/webapp/``, он читает справочник
 по относительному пути (``okved.json`` рядом с ``app.js``). Чтобы не
 держать симлинк (несовместимо с Windows/git), мы копируем актуальные
 JSON-файлы из ``data/okved/`` в ``src/webapp/`` минифицированными.
 
+Дополнительно: в ``index.html`` есть плейсхолдер
+``__ASSET_VERSION__`` в URL'ах ``app.js`` и ``style.css``. Этот скрипт
+заменяет его на текущий timestamp — Telegram WebView не кеширует
+файл, если query-параметр ``?v=`` сменился.
+
 Запуск:
     python scripts/sync_webapp_okved.py
 
-Перезапускайте при любых правках ``data/okved/okved_enriched.json``
-или ``data/okved/okved_targets.json``. CI/деплой может вызывать этот
-скрипт автоматически перед публикацией Mini App.
+Перезапускайте при любых правках ``data/okved/*.json`` ИЛИ
+``src/webapp/index.html|app.js|style.css``. CI/деплой может вызывать
+этот скрипт автоматически перед публикацией.
 """
 
 import json
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +59,26 @@ def main() -> int:
         total += 1
 
     print(f"Готово: {total} файлов синхронизировано")
+
+    # Cache-busting: подменяем __ASSET_VERSION__ или старый ?v=... на
+    # свежий timestamp. Поддерживаем оба варианта, чтобы можно было
+    # запустить скрипт несколько раз подряд (idempotent).
+    index_path = WEBAPP / "index.html"
+    if index_path.exists():
+        new_version = datetime.now().strftime("%Y%m%d_%H%M%S")
+        text = index_path.read_text(encoding="utf-8")
+        text2 = re.sub(
+            r'(\.(?:js|css))\?v=[^"\']*',
+            lambda m: f"{m.group(1)}?v={new_version}",
+            text,
+        )
+        text2 = text2.replace("__ASSET_VERSION__", new_version)
+        if text2 != text:
+            index_path.write_text(text2, encoding="utf-8")
+            print(f"  index.html: cache-version = {new_version}")
+        else:
+            print("  index.html: токены не найдены (пропущено)")
+
     return 0
 
 
