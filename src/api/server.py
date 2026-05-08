@@ -243,10 +243,16 @@ async def repush_to_sheets(request: web.Request) -> web.Response:
         run = session.get(ParseRun, run_id)
         if not run or run.tenant_id != tenant.id:
             return web.json_response({"error": "run not found"}, status=404)
+        # ВАЖНО: фильтруем только is_new=True — компании, которые
+        # реально являются «новыми» именно для этого запуска. В
+        # run_companies могут лежать и записи is_new=False (когда
+        # компания после enrich оказалась дубликатом из другой темы),
+        # их в Sheets выводить нельзя — иначе при перезаливке будут
+        # показаны не те данные.
         rows = session.execute(
             select(Company)
             .join(RunCompany, RunCompany.company_id == Company.id)
-            .where(RunCompany.run_id == run.id)
+            .where(RunCompany.run_id == run.id, RunCompany.is_new == True)  # noqa: E712
             .order_by(Company.id)
         ).scalars().all()
         run_source = run.source

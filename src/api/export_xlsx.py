@@ -70,10 +70,13 @@ def export_run_to_xlsx(session: Session, run_id: int) -> tuple[bytes, str]:
     if not run:
         raise ValueError(f"ParseRun id={run_id} не найден")
 
+    # Фильтруем только новые для этого запуска: дубликаты, попавшие
+    # в run_companies с is_new=False (компания уже была в БД от
+    # другого запуска), не должны идти в Excel.
     rows = session.execute(
         select(Company)
         .join(RunCompany, RunCompany.company_id == Company.id)
-        .where(RunCompany.run_id == run_id)
+        .where(RunCompany.run_id == run_id, RunCompany.is_new == True)  # noqa: E712
         .order_by(Company.id)
     ).scalars().all()
 

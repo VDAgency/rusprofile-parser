@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
 from playwright.async_api import async_playwright
+from sqlalchemy import select
 
 from src.config import (
     DEFAULT_MAX_NEW,
@@ -367,27 +368,56 @@ async def run_yandex(
                             f"Яндекс.Карты: найдено {processed} (в источнике ~{total})"
                         )
 
-                # Берём с запасом x2 (но не более MAX_NEW_HARD_LIMIT*1.5):
-                # часть карточек может оказаться дубликатами.
-                fetch_limit = min(max_new_clamped * 2, int(MAX_NEW_HARD_LIMIT * 1.5))
-                places = await scrape_list(
-                    context, region=region, category=category,
-                    max_places=fetch_limit,
-                    progress_callback=yandex_progress, logs_dir=LOG_DIR,
-                )
+                # Итеративный добор: scrape_list умеет докручивать
+                # выдачу до max_places. Если первого захода (max_new*3)
+                # не хватило — запросим больше. Останавливаемся, когда
+                # набрали max_new_clamped новых ИЛИ выдача исчерпалась
+                # (scrape_list вернул меньше, чем мы запросили) ИЛИ
+                # упёрлись в верхний лимит.
+                seen_yandex_urls: set[str] = set()
+                source_exhausted = False
+                attempt = 0
+                hard_top = MAX_NEW_HARD_LIMIT * 2
+                while len(new_places) < max_new_clamped and not source_exhausted:
+                    attempt += 1
+                    fetch_limit = min(
+                        max(max_new_clamped * 3 * attempt, 30),
+                        hard_top,
+                    )
+                    places = await scrape_list(
+                        context, region=region, category=category,
+                        max_places=fetch_limit,
+                        progress_callback=yandex_progress, logs_dir=LOG_DIR,
+                    )
+                    # Если источник вернул меньше, чем мы попросили — он
+                    # действительно исчерпан, дальше пробовать бесполезно.
+                    if len(places) < fetch_limit:
+                        source_exhausted = True
 
-                # Дедуп по списочной выдаче (без enrich): тут есть телефон
-                # не всегда; ИНН не бывает.
-                for p in places:
-                    phone_norm = normalize_phone(p.phone) if p.phone else None
-                    if is_duplicate(inn=None, ogrn=None,
-                                    phone_normalized=phone_norm, known=known):
-                        skipped += 1
-                        continue
-                    new_places.append(p)
-                    if phone_norm:
-                        known.phone.add(phone_norm)
-                    if len(new_places) >= max_new_clamped:
+                    # Каждая итерация может выдать те же первые карточки —
+                    # отслеживаем их по yandex_url, чтобы не плодить
+                    # дубли между итерациями.
+                    for p in places:
+                        if p.yandex_url and p.yandex_url in seen_yandex_urls:
+                            continue
+                        if p.yandex_url:
+                            seen_yandex_urls.add(p.yandex_url)
+
+                        phone_norm = normalize_phone(p.phone) if p.phone else None
+                        if is_duplicate(
+                            inn=None, ogrn=None,
+                            phone_normalized=phone_norm, known=known,
+                        ):
+                            skipped += 1
+                            continue
+                        new_places.append(p)
+                        if phone_norm:
+                            known.phone.add(phone_norm)
+                        if len(new_places) >= max_new_clamped:
+                            break
+
+                    # Защита от бесконечного добора
+                    if attempt >= 4 or fetch_limit >= hard_top:
                         break
 
                 if new_places:
@@ -423,15 +453,30 @@ async def run_yandex(
                 sheet_url=None, status=run.status, error_message=run.error_message,
             )
 
-        # После enrich мог появиться телефон — на этом этапе ещё одна
-        # проверка дубликата через upsert (внутри _find_existing_company).
-        # Несколько YandexPlace могут после enrich «схлопнуться» в одну
-        # и ту же компанию (общий телефон у сети ресторанов и т.п.) —
-        # тогда upsert вернёт один и тот же db_c.id. RunCompany имеет
-        # PRIMARY KEY (run_id, company_id), поэтому второй INSERT упадёт
-        # с UNIQUE constraint failed. Дедуплируем через set.
+        # После enrich у части карточек появился телефон, которого не
+        # было на этапе списочной выдачи. По нему делаем повторный
+        # дедуп — против ВСЕЙ темы (load_known_keys) и против
+        # текущего запуска (seen_company_ids). В run_companies
+        # записываем ТОЛЬКО реальных «новых для темы», иначе repush
+        # и xlsx будут отдавать лишнее.
         seen_company_ids: set[int] = set()
         for p in new_places:
+            phone_norm = normalize_phone(p.phone) if p.phone else None
+
+            # 1) Двойной дедуп по теме: телефон, появившийся после enrich,
+            # уже мог встречаться в этой теме (известен по другой
+            # карточке этого же запуска или по предыдущим запускам).
+            if phone_norm and phone_norm in known.phone:
+                # Если это от ТЕКУЩЕГО запуска (мы только что добавили),
+                # то seen_company_ids ниже отловит — отдельной ветки
+                # не нужно. Но для предыдущих запусков темы это
+                # настоящий дубликат — пропускаем.
+                # Проверка: phone был в known ДО текущего цикла?
+                # Для простоты: если seen_company_ids ещё не содержит
+                # компанию с этим телефоном, значит это от предыдущего
+                # запуска темы — реальный дубль.
+                pass  # обработаем ниже через seen_company_ids/upsert
+
             db_c, created = upsert_company(
                 session, tenant,
                 name=p.name, source=Source.YANDEX_MAPS.value,
@@ -444,20 +489,41 @@ async def run_yandex(
                     "yandex_url": p.yandex_url,
                 },
             )
+
+            # 2) Несколько карточек одного запуска схлопнулись в одну
+            # компанию (общий телефон у сети, например).
             if db_c.id in seen_company_ids:
-                # В этом запуске уже есть RunCompany для этой компании —
-                # пропускаем, иначе IntegrityError.
                 skipped += 1
                 continue
             seen_company_ids.add(db_c.id)
+
+            # 3) Если upsert вернул created=False — компания уже была
+            # в БД. Чтобы понять, появлялась ли она в ЭТОЙ теме раньше,
+            # смотрим, есть ли её запись в run_companies для других
+            # запусков той же темы. Если да — это дубль в теме,
+            # в run_companies НЕ пишем. Если нет — компания новая для
+            # темы (просто переиспользуем уже существующую запись
+            # company), пишем is_new=True.
+            if not created:
+                already_in_theme = session.scalar(
+                    select(RunCompany.run_id)
+                    .join(ParseRun, ParseRun.id == RunCompany.run_id)
+                    .where(
+                        ParseRun.theme_id == run.theme_id,
+                        ParseRun.id != run.id,
+                        RunCompany.company_id == db_c.id,
+                        RunCompany.is_new == True,  # noqa: E712
+                    )
+                    .limit(1)
+                )
+                if already_in_theme is not None:
+                    skipped += 1
+                    continue
+
             session.add(RunCompany(
-                run_id=run.id, company_id=db_c.id, is_new=created,
+                run_id=run.id, company_id=db_c.id, is_new=True,
             ))
-            if created:
-                persisted_places.append(p)
-            else:
-                # Стало дублем после enrich (нашли телефон, который уже есть)
-                skipped += 1
+            persisted_places.append(p)
 
         run.total_new = len(persisted_places)
         run.total_skipped = skipped
