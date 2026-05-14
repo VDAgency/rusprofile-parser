@@ -311,10 +311,11 @@ def filters_to_body(filters: SearchFilters) -> dict:
     if filters.query:
         body["query"] = filters.query
 
-    # Статусы
-    for code in filters.status:
-        if code:
-            body[f"state-{code}"] = True
+    # Статусы: новый endpoint использует state_N (подчёркивание), а не state-N.
+    # Все пять флагов должны присутствовать в body (bool), иначе Vue-форма
+    # игнорирует статусы. Выставляем True только для выбранных.
+    for n in ("1", "2", "3", "4", "5"):
+        body[f"state_{n}"] = n in filters.status
 
     # ОКВЭД + strict
     okved_codes = [c for c in filters.okved if c]

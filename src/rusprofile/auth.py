@@ -128,99 +128,58 @@ async def _dismiss_cookie_banner(page) -> None:
 
 
 async def _login(context: BrowserContext) -> bool:
-    """Выполняет двухэтапный вход: email → пароль."""
+    """Выполняет вход через прямой POST к /auth.php?action=login.
+
+    Rusprofile в 2026-05 перевёл модалку входа на lazy-loaded Vue-компонент
+    с invisible reCAPTCHA, которая не монтируется в headless Chromium.
+    Вместо UI-взаимодействия используем прямой API-вызов:
+      POST /auth.php?action=login
+      FormData: login=EMAIL, password=PASS
+      Header: X-Csrf-Token: <значение cookie __Host-csrf-token>
+    При success: true браузер получает Set-Cookie с сессией.
+    """
     page = await context.new_page()
     try:
-        logger.info("Открываем главную rusprofile.ru...")
+        logger.info("Открываем главную rusprofile.ru для получения CSRF-токена...")
         await _goto(page, RUSPROFILE_BASE_URL, timeout=45000)
+        await page.wait_for_timeout(2000)
 
-        # На Rusprofile JS-модалка монтируется не сразу после commit —
-        # ждём появления самого триггера, чтобы быть уверенными, что Vue
-        # приложение инициализировалось.
-        await page.wait_for_selector("#menu-personal-trigger", timeout=20000)
-        await page.wait_for_timeout(1500)
-
-        await _dismiss_cookie_banner(page)
-
-        logger.info("Открываем модалку входа...")
-        # Кликаем именно по кнопке внутри триггера на случай, если Vue вешает
-        # обработчик на вложенный span, а не на контейнер.
-        await page.locator("#menu-personal-trigger").first.click()
-
-        # Шаг 1 — email
-        logger.info("Вводим email...")
-        email_input = page.locator('input[name="email"][type="email"]').first
-        await email_input.wait_for(state="visible", timeout=15000)
-        await email_input.fill(RUSPROFILE_LOGIN)
-        await page.wait_for_timeout(500)
-
-        # Кнопка «Продолжить» — синяя кнопка внутри модалки
-        continue_btn = page.locator(
-            '.vModal-body button:has-text("Продолжить")'
-        ).first
-        await continue_btn.click()
-
-        # Шаг 2 — пароль (поле появляется после клика)
-        logger.info("Вводим пароль...")
-        password_input = page.locator('input[name="current-password"]').first
-        await password_input.wait_for(state="visible", timeout=10000)
-        await password_input.fill(RUSPROFILE_PASSWORD)
-        await page.wait_for_timeout(500)
-
-        # Кнопка «Войти» в модалке; после ввода пароля она становится активной
-        submit_btn = page.locator(
-            '.vModal-body button.btn-blue:has-text("Войти")'
-        ).first
-        await submit_btn.wait_for(state="visible", timeout=5000)
-        # Ждём, пока снимется disabled
-        await page.wait_for_function(
-            """() => {
-                const btns = document.querySelectorAll('.vModal-body button.btn-blue');
-                for (const b of btns) {
-                    if ((b.textContent || '').includes('Войти') && !b.disabled) return true;
+        logger.info("Отправляем POST /auth.php?action=login...")
+        result = await page.evaluate(
+            """async (creds) => {
+                function getCookie(name) {
+                    const v = `; ${document.cookie}`;
+                    const parts = v.split(`; ${name}=`);
+                    return parts.length === 2 ? parts.pop().split(';').shift() : null;
                 }
-                return false;
+                const csrf = getCookie('__Host-csrf-token') || '';
+                const fd = new FormData();
+                fd.append('login', creds.login);
+                fd.append('password', creds.password);
+                try {
+                    const resp = await fetch('/auth.php?action=login', {
+                        method: 'POST',
+                        headers: {'X-Csrf-Token': csrf},
+                        body: fd,
+                    });
+                    const text = await resp.text();
+                    return JSON.parse(text);
+                } catch (e) {
+                    return {success: false, message: e.toString()};
+                }
             }""",
-            timeout=5000,
+            {"login": RUSPROFILE_LOGIN, "password": RUSPROFILE_PASSWORD},
         )
-        await submit_btn.click()
 
-        # Ждём закрытия модалки / авторизации
-        await page.wait_for_timeout(5000)
-
-        # Rusprofile может показать уведомление «Аккаунт используется
-        # на нескольких устройствах» — закрываем его кнопкой «Продолжить работу».
-        # Пока модалка открыта, #menu-personal-trigger ещё не обновляется на имя
-        # пользователя, поэтому _is_authenticated вернёт False, если пропустить
-        # этот шаг.
-        try:
-            continue_link = page.locator(
-                '.mw-shared-account a.btn-blue, '
-                '.mw-shared-account a:has-text("Продолжить работу")'
-            ).first
-            if await continue_link.is_visible(timeout=5000):
-                logger.warning(
-                    "Rusprofile сообщил о входе с нескольких устройств — "
-                    "закрываем уведомление. Клиент мог быть выкинут из своего браузера."
-                )
-                await continue_link.click()
-                await page.wait_for_timeout(3000)
-        except Exception:
-            pass
-
-        if await _is_authenticated(page):
-            logger.info("Авторизация успешна")
+        if result.get("success"):
+            logger.info("Авторизация успешна (hasPaidSubscription=%s)",
+                        result.get("fields", {}).get("hasPaidSubscription"))
             await _save_cookies(context)
             return True
 
-        # Могла показаться ошибка в модалке — логируем её текст
-        error_text = await page.evaluate("""
-            () => {
-                const err = document.querySelector('.vModal-body .error, .vModal-body [class*="error"]');
-                return err ? (err.textContent || '').trim() : null;
-            }
-        """)
-        logger.error("Авторизация не удалась. Ошибка модалки: %s", error_text)
+        code = result.get("code")
+        msg = result.get("message", "")
+        logger.error("Авторизация не удалась: code=%s message=%s", code, msg)
         return False
 
     except Exception as e:

@@ -1,18 +1,21 @@
-"""Парсер компаний с Rusprofile — данные из JSON-ответа /ajax_auth.php.
+"""Парсер компаний с Rusprofile — данные из JSON-ответа /ajax/search/advanced.
 
-Vue-форма /search-advanced сабмитит POST к ``/ajax_auth.php?action=search_advanced``
-с ``application/json`` body и свежим X-CSRF-Token. Мы через ``page.route()``
-перехватываем этот POST и подменяем в теле фильтры/номер страницы, а
-заголовки (включая CSRF) Vue проставляет сам. Ответ — готовый JSON со
-всеми полями карточек (name, inn, ogrn, region, address, finance_revenue,
-link), ничего парсить из HTML не нужно.
+Vue-форма /search-advanced сабмитит POST к ``/ajax/search/advanced?cacheKey=RANDOM``
+с ``application/json`` body. Мы через ``page.route()`` перехватываем этот POST
+и подменяем в теле фильтры/номер страницы, а заголовки (включая CSRF) Vue
+проставляет сам. Ответ — JSON вида:
+    {success, code, message, data: {items:[...], total_count, pagination}}
 
-Подтверждённые ключи body (см. ``scripts/diag_combos.py`` →
-``logs/diag_combos.log``):
+Подтверждённые ключи body (разведка 2026-05-14, scripts/diag_new_search.py):
 
-    {"state-1": true, "okved_strict": true,
-     "region": ["63"], "okopf": ["12165","12300"],
-     "okved": ["46.9"], "query": "...", "page": "2"}
+    {"action":"search_advanced","query":"","state_1":true,"state_2":false,...
+     "state_5":false,"okved":["46.49.3"],"okved_strict":true,"region":["63"],
+     "okopf":["12165","12300"],"page":"2"}
+
+Изменения по сравнению с до-2026-05-08 реализацией:
+  • endpoint: /ajax_auth.php?action=search_advanced → /ajax/search/advanced?cacheKey=…
+  • статусы body: "state-N":true → "state_N":true/false (все 5 флагов)
+  • ответ: result[] → data.items[]; total_count теперь в data.total_count
 """
 
 import asyncio
@@ -365,11 +368,11 @@ async def _fetch_page_json(
     selector_timeout = 20000 if attempt == 1 else 60000
     try:
         await page.wait_for_selector(
-            "#state-1", state="attached", timeout=selector_timeout
+            "#filter-form", state="attached", timeout=selector_timeout
         )
     except Exception:
         logger.warning(
-            "Форма поиска не отрисовалась (нет #state-1, попытка %d, timeout=%dms)",
+            "Форма поиска не отрисовалась (нет #filter-form, попытка %d, timeout=%dms)",
             attempt, selector_timeout,
         )
         if attempt == 1:
@@ -454,16 +457,16 @@ async def parse_search_results(
             logger.warning("route.continue_ упал: %s", e)
 
     async def on_response(resp):
-        if "ajax_auth.php" not in resp.url:
+        if "/ajax/search/advanced" not in resp.url:
             return
         try:
             body_bytes = await resp.body()
             j = json.loads(body_bytes.decode("utf-8", errors="replace"))
             responses.append(j)
         except Exception as e:
-            logger.debug("Не смог разобрать ajax_auth ответ: %s", e)
+            logger.debug("Не смог разобрать ajax/search/advanced ответ: %s", e)
 
-    await page.route("**/ajax_auth.php*", handle_route)
+    await page.route("**/ajax/search/advanced**", handle_route)
     response_listener = lambda r: asyncio.create_task(on_response(r))
     page.on("response", response_listener)
 
@@ -481,20 +484,23 @@ async def parse_search_results(
                 break
 
             code = j.get("code")
-            if code not in (None, 0):
+            if not j.get("success") and code not in (None, 0):
                 logger.warning(
                     "API вернул ошибку на странице %d: code=%s msg=%s",
                     current_page, code, j.get("message"),
                 )
                 break
 
+            data = j.get("data") or {}
             if total_found is None:
-                total_found = j.get("total_count") or (
-                    (j.get("ul_count") or 0) + (j.get("ip_count") or 0)
+                total_found = data.get("total_count") or (
+                    (data.get("ul_count") or 0)
+                    + (data.get("ip_count") or 0)
+                    + (data.get("fl_count") or 0)
                 )
                 logger.info("Всего найдено: %d компаний", total_found)
 
-            result_items = j.get("result") or []
+            result_items = data.get("items") or []
             if not result_items:
                 logger.info("Пусто на странице %d — конец выдачи", current_page)
                 break
@@ -571,7 +577,7 @@ async def parse_search_results(
         except Exception:
             pass
         try:
-            await page.unroute("**/ajax_auth.php*")
+            await page.unroute("**/ajax/search/advanced**")
         except Exception:
             pass
         await page.close()
