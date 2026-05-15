@@ -49,13 +49,13 @@
 
 ## Блок 3. Кросс-обогащение источников
 
-- [ ] **3.1** `src/services/cross_enrichment_service.py`:
+- [x] **3.1** `src/services/cross_enrichment_service.py`:
   - `enrich_from_yandex(company)` — Direction 1 (Rusprofile → Я.Карты по телефону E.164)
   - `enrich_from_rusprofile(company)` — Direction 2 (Я.Карты → Rusprofile по «название + регион»)
   - идемпотентность через `cross_enriched_at` (TTL 30 дней)
   - `asyncio.Semaphore(2)`, таймаут 30 сек/направление
-- [ ] **3.2** `tests/test_cross_enrichment.py` с моками парсеров.
-- [ ] **3.3** Тесты зелёные → commit `feat(cross): обогащение источников Я.Карты ↔ Rusprofile` → push.
+- [x] **3.2** `tests/test_cross_enrichment.py` с моками парсеров.
+- [x] **3.3** Тесты зелёные → commit `feat(cross): обогащение источников Я.Карты ↔ Rusprofile` → push.
 
 ## Блок 4. ИИ-конвейер (Stage A, 1, 2, 3)
 

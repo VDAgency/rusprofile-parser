@@ -4,6 +4,15 @@ import os
 import pytest
 
 
+@pytest.fixture
+def anyio_backend():
+    """Фиксируем asyncio как backend для anyio-тестов.
+
+    Без этого anyio попробует ещё trio и упадёт, если он не установлен.
+    """
+    return "asyncio"
+
+
 @pytest.fixture(scope="function")
 def db_session(monkeypatch, tmp_path):
     """Свежая БД в файле tmp на каждый тест.
