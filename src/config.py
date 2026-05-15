@@ -26,9 +26,42 @@ GOOGLE_SHEETS_CREDENTIALS_FILE = os.getenv(
 )
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 
-# OpenAI (Этап 2)
+# OpenAI / OpenRouter (Этап 2 v3)
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+# Совместимость со старой переменной OPENAI_MODEL.
+_legacy_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+AI_MODEL_EXTRACT = os.getenv("AI_MODEL_EXTRACT", _legacy_model)
+AI_MODEL_QUALIFY = os.getenv("AI_MODEL_QUALIFY", _legacy_model)
+AI_MAX_TOKENS_EXTRACT = int(os.getenv("AI_MAX_TOKENS_EXTRACT", "1500"))
+AI_MAX_TOKENS_QUALIFY = int(os.getenv("AI_MAX_TOKENS_QUALIFY", "400"))
+AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.2"))
+AI_PROMPT_EXTRACT_FILE = os.getenv(
+    "AI_PROMPT_EXTRACT_FILE", "config/prompts/extract_profile.txt"
+)
+AI_PROMPT_QUALIFY_FILE = os.getenv(
+    "AI_PROMPT_QUALIFY_FILE", "config/prompts/qualify_company.txt"
+)
+# Stage 2 — пороги
+KW_HOT_MIN = int(os.getenv("KW_HOT_MIN", "3"))
+KW_COLD_MIN = int(os.getenv("KW_COLD_MIN", "2"))
+# Stage 1 — извлечение сайтов
+WEBSITE_TIMEOUT_S = int(os.getenv("WEBSITE_TIMEOUT_S", "15"))
+WEBSITE_MAX_PAGES = int(os.getenv("WEBSITE_MAX_PAGES", "3"))
+WEBSITE_MAX_CHARS = int(os.getenv("WEBSITE_MAX_CHARS", "12000"))
+# Параллелизм
+QUALIFY_WEBSITE_CONCURRENCY = int(os.getenv("QUALIFY_WEBSITE_CONCURRENCY", "3"))
+QUALIFY_LLM_CONCURRENCY = int(os.getenv("QUALIFY_LLM_CONCURRENCY", "5"))
+QUALIFY_MAX_COMPANIES_PER_RUN = int(os.getenv("QUALIFY_MAX_COMPANIES_PER_RUN", "300"))
+# Тарифы (defaults для новых тенантов)
+DEFAULT_TARIFF_PLAN = os.getenv("DEFAULT_TARIFF_PLAN", "simple")
+DEFAULT_AI_QUOTA_COMPANIES = int(os.getenv("DEFAULT_AI_QUOTA_COMPANIES", "1000"))
+DEFAULT_AI_QUOTA_TOKENS = int(os.getenv("DEFAULT_AI_QUOTA_TOKENS", "10000000"))
+TARIFF_PERIOD_DAYS = int(os.getenv("TARIFF_PERIOD_DAYS", "30"))
+# Стоимость для оценки
+AI_COST_PER_1K_INPUT_RUB = float(os.getenv("AI_COST_PER_1K_INPUT_RUB", "0.015"))
+AI_COST_PER_1K_OUTPUT_RUB = float(os.getenv("AI_COST_PER_1K_OUTPUT_RUB", "0.06"))
 
 # База данных. По умолчанию SQLite-файл в data/. На SaaS-этапе
 # переедем на PostgreSQL — для этого подменим DATABASE_URL в .env.

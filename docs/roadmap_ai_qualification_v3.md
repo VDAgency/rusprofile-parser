@@ -59,13 +59,13 @@
 
 ## Блок 4. ИИ-конвейер (Stage A, 1, 2, 3)
 
-- [ ] **4.1** `src/ai/__init__.py` + `src/ai/llm_client.py`: тонкая обёртка `AsyncLLMClient` над `openai.AsyncOpenAI`, поддержка `AI_PROVIDER=openai|openrouter` через `base_url`, retry с exponential backoff, учёт токенов.
-- [ ] **4.2** `src/ai/profile_extractor.py` + `config/prompts/extract_profile.txt` + `src/services/profile_service.py` (CRUD + кеш по `brief_hash`).
-- [ ] **4.3** `src/api/profiles_router.py`: `POST /api/profiles/extract`, CRUD профилей.
-- [ ] **4.4** `src/ai/website_extractor.py`: `httpx` + `trafilatura` + Playwright fallback при 403/429, валидация (`<300` симв. → unknown, заглушка → cold).
-- [ ] **4.5** `src/ai/keyword_matcher.py`: совпадения через `regex.\b{kw}\b`, нормализация (lowercase, ё→е), решение hot/cold/needs_llm.
-- [ ] **4.6** `src/ai/qualifier.py` + `config/prompts/qualify_company.txt`: Stage 3, `response_format=json_object`, парсинг ответа `{status, comment, signals, hook}`.
-- [ ] **4.7** `tests/` для каждого модуля (`test_profile_extractor`, `test_keyword_matcher`, `test_website_extractor`, `test_qualifier`) с моками LLM/httpx → commit `feat(ai): конвейер Stage A/1/2/3` → push.
+- [x] **4.1** `src/ai/__init__.py` + `src/ai/llm_client.py`: тонкая обёртка `AsyncLLMClient` над `openai.AsyncOpenAI`, поддержка `AI_PROVIDER=openai|openrouter` через `base_url`, retry с exponential backoff, учёт токенов.
+- [x] **4.2** `src/ai/profile_extractor.py` + `config/prompts/extract_profile.txt` + `src/services/profile_service.py` (CRUD + кеш по `brief_hash`).
+- [x] **4.3** `src/api/profiles_router.py`: `POST /api/profiles/extract`, CRUD профилей.
+- [x] **4.4** `src/ai/website_extractor.py`: `httpx` + `trafilatura` + Playwright fallback при 403/429, валидация (`<300` симв. → unknown, заглушка → cold).
+- [x] **4.5** `src/ai/keyword_matcher.py`: совпадения через `regex.\b{kw}\b`, нормализация (lowercase, ё→е), решение hot/cold/needs_llm.
+- [x] **4.6** `src/ai/qualifier.py` + `config/prompts/qualify_company.txt`: Stage 3, `response_format=json_object`, парсинг ответа `{status, comment, signals, hook}`.
+- [x] **4.7** `tests/` для каждого модуля (`test_profile_extractor`, `test_keyword_matcher`, `test_website_extractor`, `test_qualifier`) с моками LLM/httpx → commit `feat(ai): конвейер Stage A/1/2/3` → push.
 
 ## Блок 5. Оркестрация и API
 
