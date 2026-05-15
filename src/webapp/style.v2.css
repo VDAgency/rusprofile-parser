@@ -514,3 +514,130 @@ select:focus, input:focus {
     color: var(--tg-theme-hint-color, #999);
     margin-top: 8px;
 }
+
+/* ─── Этап 2 v3: тариф + профили ───────────────────────────────── */
+
+.tariff-badge {
+    background-color: var(--tg-theme-secondary-bg-color, #f0f4fa);
+    border: 1px solid var(--tg-theme-section-separator-color, #e0e0e0);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 13px;
+}
+
+.tariff-badge.hidden { display: none; }
+
+.tariff-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.tariff-pct {
+    font-size: 12px;
+    color: var(--tg-theme-hint-color, #999);
+}
+
+.tariff-bar {
+    height: 4px;
+    background-color: var(--tg-theme-bg-color, #e0e0e0);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.tariff-bar-fill {
+    height: 100%;
+    background-color: var(--tg-theme-button-color, #3390ec);
+    transition: width 0.3s ease;
+}
+
+.tariff-meta {
+    font-size: 12px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-top: 4px;
+}
+
+.profile-card {
+    background-color: var(--tg-theme-secondary-bg-color, #f0f4fa);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+
+.profile-card-name {
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 4px;
+}
+
+.profile-card-meta {
+    font-size: 12px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-bottom: 4px;
+}
+
+.profile-card-actions {
+    margin-top: 8px;
+}
+
+.profile-icp {
+    background-color: var(--tg-theme-secondary-bg-color, #f0f4fa);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.profile-criteria {
+    margin: 8px 0;
+    padding-left: 20px;
+    font-size: 14px;
+}
+
+.profile-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+    min-height: 32px;
+}
+
+.profile-chip {
+    background-color: var(--tg-theme-button-color, #3390ec);
+    color: var(--tg-theme-button-text-color, #fff);
+    padding: 4px 10px;
+    border-radius: 14px;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chip-x {
+    background: transparent;
+    color: inherit;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0;
+}
+
+/* AI-only элементы — скрываются для simple-тарифа */
+.ai-only.hidden { display: none; }
+
+.run-ai {
+    background-color: var(--tg-theme-bg-color, #ffffff);
+    border-left: 3px solid var(--tg-theme-button-color, #3390ec);
+    padding: 6px 10px;
+    margin: 8px 0;
+    font-size: 13px;
+    border-radius: 4px;
+}
+
+.run-ai small {
+    color: var(--tg-theme-hint-color, #999);
+    font-size: 11px;
+}

@@ -5,10 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Парсер компаний</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="style.v2.css?v=20260508_203019">
+    <link rel="stylesheet" href="style.v2.css?v=20260515_v3">
 </head>
 <body>
     <div class="container">
+
+      <!-- Плашка тарифа (Этап 2 v3) — заполняется JS из /api/tariff -->
+      <div id="tariffBadge" class="tariff-badge hidden"></div>
 
       <!-- Главные вкладки: Парсинг / История -->
       <div id="page-parse" class="page">
@@ -44,6 +47,25 @@
                 <div class="hint">
                     1–300. Уже найденные ранее организации пропускаются и не считаются.
                     Чем больше — тем дольше; ~30 карточек ≈ 2 минуты.
+                </div>
+            </div>
+
+            <!-- ИИ-квалификация (только для AI-тарифа) -->
+            <div class="form-group ai-only hidden">
+                <label for="yandex_ai_profile">ИИ-квалификация</label>
+                <select id="yandex_ai_profile" name="yandex_ai_profile">
+                    <option value="">Не использовать</option>
+                </select>
+            </div>
+
+            <!-- Кросс-обогащение (показываем всем тарифам) -->
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="yandex_cross_enrich" checked>
+                    <span>Кросс-обогащение (Я.Карты ↔ Rusprofile)</span>
+                </label>
+                <div class="hint">
+                    Дополнительно подтянет данные из второго источника. Замедлит парсинг.
                 </div>
             </div>
 
@@ -269,6 +291,25 @@
                 </div>
             </div>
 
+            <!-- ИИ-квалификация (только для AI-тарифа) -->
+            <div class="form-group ai-only hidden">
+                <label for="rusprofile_ai_profile">ИИ-квалификация</label>
+                <select id="rusprofile_ai_profile" name="rusprofile_ai_profile">
+                    <option value="">Не использовать</option>
+                </select>
+            </div>
+
+            <!-- Кросс-обогащение (показываем всем тарифам) -->
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="rusprofile_cross_enrich" checked>
+                    <span>Кросс-обогащение (Я.Карты ↔ Rusprofile)</span>
+                </label>
+                <div class="hint">
+                    Дополнительно подтянет данные из второго источника. Замедлит парсинг.
+                </div>
+            </div>
+
             <!-- Кнопка запуска -->
             <button type="submit" id="submitBtn" class="btn-primary">
                 Запустить парсинг
@@ -296,6 +337,80 @@
         <div id="history-list"></div>
       </div>
 
+      <!-- Вкладка «ИИ-профили» (только для AI-тарифа) -->
+      <div id="page-profiles" class="page hidden ai-only">
+        <h1>ИИ-профили</h1>
+        <p class="subtitle">
+            Опишите своими словами, кого ищете — ИИ извлечёт критерии и
+            ключевые слова. Профиль будет использоваться для квалификации
+            компаний после парсинга.
+        </p>
+
+        <!-- Список существующих профилей -->
+        <div id="profiles-status" class="hint">Загрузка…</div>
+        <div id="profiles-list"></div>
+
+        <button type="button" id="profileNewBtn" class="btn-primary">
+            + Создать профиль
+        </button>
+
+        <!-- Шаг 1: ввод брифа -->
+        <div id="profileStep1" class="hidden">
+            <h2>Шаг 1. Опишите идеального клиента</h2>
+            <div class="form-group">
+                <label for="profile_name">Название профиля</label>
+                <input type="text" id="profile_name"
+                       placeholder="Напр. Сувениры — оптовики">
+            </div>
+            <div class="form-group">
+                <label for="profile_brief">Бриф</label>
+                <textarea id="profile_brief" rows="6"
+                          placeholder="Я продаю корпоративные сувениры..."></textarea>
+                <div class="hint">
+                    Подробнее = лучше. Опишите, кто ваш клиент, кто точно НЕ
+                    подходит, что для вас «горячий лид».
+                </div>
+            </div>
+            <button type="button" id="profileExtractBtn" class="btn-primary">
+                Подготовить профиль
+            </button>
+            <button type="button" id="profileCancelBtn" class="btn-secondary">
+                Отмена
+            </button>
+        </div>
+
+        <!-- Шаг 2: проверка и редактирование -->
+        <div id="profileStep2" class="hidden">
+            <h2>Шаг 2. Проверьте профиль</h2>
+            <div class="form-group">
+                <label>Идеальный клиент</label>
+                <div id="profileIcp" class="profile-icp"></div>
+            </div>
+            <div class="form-group">
+                <label>Признаки горячего лида</label>
+                <ul id="profileCriteria" class="profile-criteria"></ul>
+            </div>
+            <div class="form-group">
+                <label>Позитивные ключевые слова</label>
+                <div id="profilePosKws" class="profile-chips"></div>
+                <input type="text" id="profilePosAdd"
+                       placeholder="Добавить ключевое слово и нажать Enter">
+            </div>
+            <div class="form-group">
+                <label>Негативные ключевые слова</label>
+                <div id="profileNegKws" class="profile-chips"></div>
+                <input type="text" id="profileNegAdd"
+                       placeholder="Добавить и нажать Enter">
+            </div>
+            <button type="button" id="profileSaveBtn" class="btn-primary">
+                Сохранить профиль
+            </button>
+            <button type="button" id="profileBackBtn" class="btn-secondary">
+                Назад к брифу
+            </button>
+        </div>
+      </div>
+
     </div>  <!-- /.container -->
 
     <!-- Нижняя навигация -->
@@ -308,8 +423,12 @@
             <span class="nav-icon">📜</span>
             <span class="nav-label">История</span>
         </button>
+        <button type="button" class="nav-btn ai-only hidden" data-page="profiles">
+            <span class="nav-icon">🤖</span>
+            <span class="nav-label">ИИ-профили</span>
+        </button>
     </nav>
 
-    <script src="app.v2.js?v=20260508_203019"></script>
+    <script src="app.v2.js?v=20260515_v3"></script>
 </body>
 </html>

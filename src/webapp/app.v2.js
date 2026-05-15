@@ -571,6 +571,10 @@ function submitForm(e) {
     }
     const data = getFormData();
     data.source = 'rusprofile';
+    // Этап 2 v3 — ИИ-квалификация и кросс-обогащение.
+    const aiProfile = val('rusprofile_ai_profile');
+    if (aiProfile) data.ai_profile_id = parseInt(aiProfile, 10);
+    data.enable_cross_enrichment = checked('rusprofile_cross_enrich');
     tg.sendData(JSON.stringify(data));
 }
 
@@ -595,6 +599,9 @@ function submitYandexForm(e) {
         category: category,
         max_new: maxNew,
     };
+    const aiProfile = val('yandex_ai_profile');
+    if (aiProfile) payload.ai_profile_id = parseInt(aiProfile, 10);
+    payload.enable_cross_enrichment = checked('yandex_cross_enrich');
 
     tg.sendData(JSON.stringify(payload));
 }
@@ -618,6 +625,8 @@ function setupBottomNav() {
             });
             if (target === 'history') {
                 loadHistory();
+            } else if (target === 'profiles') {
+                loadProfilesList();
             }
         });
     });
@@ -760,6 +769,31 @@ function renderRunCard(run) {
         ? `<a class="btn-mini" href="${escapeHtml(run.sheet_url)}" target="_blank" rel="noopener">Открыть таблицу</a>`
         : '';
 
+    // Этап 2 v3 — блок ИИ-метрик, если квалификация выполнялась.
+    let aiBlock = '';
+    if (run.ai_qualify_stats) {
+        const s = run.ai_qualify_stats.by_status || {};
+        const tokens = run.ai_qualify_stats.tokens_used_total || 0;
+        const cost = run.ai_qualify_stats.cost_rub_estimate || 0;
+        const xMatches = run.ai_qualify_stats.cross_enrichment_matches || {};
+        const xTotal = (xMatches.yandex_found || 0) + (xMatches.rusprofile_found || 0)
+                       + (xMatches.both || 0);
+        aiBlock = `
+            <div class="run-ai">
+                🔥 ${s.hot || 0} · ❄ ${s.cold || 0} · ⏭ ${s.skip || 0} · ❓ ${s.unknown || 0}
+                ${s.quota_exceeded ? `· 🚫 ${s.quota_exceeded}` : ''}
+                ${tokens ? `<br><small>Токенов: ${tokens.toLocaleString('ru-RU')} (~${cost.toFixed(2)} ₽)</small>` : ''}
+                ${xTotal ? `<br><small>Кросс-обогащение: ${xTotal} матчей</small>` : ''}
+            </div>
+        `;
+    }
+    // Кнопка квалификации показывается только AI-тарифу.
+    const qualifyBtn = currentTariff === 'ai'
+        ? `<button type="button" class="btn-mini" data-action="qualify">
+               ${run.ai_qualify_stats ? 'Перезапустить ИИ' : 'Запустить ИИ'}
+           </button>`
+        : '';
+
     return `
         <div class="run-card" data-run-id="${run.id}">
             <div class="run-head">
@@ -768,10 +802,12 @@ function renderRunCard(run) {
             </div>
             <div class="run-title">${escapeHtml(run.theme_title || '(без заголовка)')}</div>
             <div class="run-stats">${stats}</div>
+            ${aiBlock}
             <div class="run-actions">
                 ${sheetBtn}
                 <button type="button" class="btn-mini" data-action="repush">Перезалить в Sheets</button>
                 <button type="button" class="btn-mini primary" data-action="xlsx">Скачать Excel</button>
+                ${qualifyBtn}
             </div>
         </div>
     `;
@@ -824,9 +860,348 @@ async function onRunAction(runId, action, btn) {
             // в чате. Если закрытие нежелательно (он хочет ещё что-то
             // сделать в истории), можно убрать.
             // tg.close();
+        } else if (action === 'qualify') {
+            // Этап 2 v3 — запуск ИИ-квалификации.
+            // Спрашиваем профиль если есть несколько.
+            let profileId = '';
+            if (cachedProfiles.length === 0) {
+                tg.showAlert('Сначала создайте ИИ-профиль в разделе «ИИ-профили».');
+                return;
+            } else if (cachedProfiles.length === 1) {
+                profileId = cachedProfiles[0].id;
+            } else {
+                const choice = prompt(
+                    'Выберите профиль (введите номер):\n'
+                    + cachedProfiles.map((p, i) => `${i + 1}. ${p.name}`).join('\n')
+                );
+                const idx = parseInt(choice, 10) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= cachedProfiles.length) return;
+                profileId = cachedProfiles[idx].id;
+            }
+            const resp = await fetch(
+                apiUrl(`/api/runs/${runId}/qualify`),
+                {
+                    ...apiFetchOptions(),
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        profile_id: profileId,
+                        force: true,
+                        enable_cross_enrichment: true,
+                    }),
+                },
+            );
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                tg.showAlert(data.error || data.message || 'Не удалось запустить.');
+                return;
+            }
+            tg.showAlert(
+                'Квалификация запущена в фоне. По завершении придёт сообщение в чат.'
+            );
         }
     } catch (err) {
         console.error(err);
+        tg.showAlert('Сеть недоступна.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
+}
+
+// =====================================================================
+// Этап 2 v3 — Тариф, профили, ИИ-квалификация
+// =====================================================================
+
+let currentTariff = 'simple';
+let cachedProfiles = [];
+
+async function loadTariff() {
+    try {
+        const resp = await fetch(apiUrl('/api/tariff'), apiFetchOptions());
+        if (!resp.ok) return;
+        const data = await resp.json();
+        currentTariff = data.tariff_plan || 'simple';
+        renderTariffBadge(data);
+        applyTariffVisibility();
+        if (currentTariff === 'ai') {
+            await loadProfilesIntoSelects();
+        }
+    } catch (err) {
+        console.error('Не удалось загрузить тариф:', err);
+    }
+}
+
+function renderTariffBadge(t) {
+    const el = document.getElementById('tariffBadge');
+    if (!el) return;
+    el.classList.remove('hidden');
+    if (t.tariff_plan === 'ai') {
+        const used = t.usage_current?.companies_processed || 0;
+        const quota = t.quotas?.companies_monthly || 0;
+        const pct = t.usage_current?.companies_percent || 0;
+        const days = t.usage_period?.days_remaining ?? '—';
+        el.innerHTML = `
+            <div class="tariff-row">
+                <strong>Тариф: AI</strong>
+                <span class="tariff-pct">${used} / ${quota} (${pct}%)</span>
+            </div>
+            <div class="tariff-bar"><div class="tariff-bar-fill" style="width:${pct}%"></div></div>
+            <div class="tariff-meta">Сброс через ${days} дн.</div>
+        `;
+    } else {
+        el.innerHTML = `
+            <div class="tariff-row">
+                <strong>Тариф: Simple</strong>
+                <span class="tariff-pct">ИИ-квалификация не подключена</span>
+            </div>
+        `;
+    }
+}
+
+function applyTariffVisibility() {
+    const isAi = currentTariff === 'ai';
+    document.querySelectorAll('.ai-only').forEach((el) => {
+        el.classList.toggle('hidden', !isAi);
+    });
+}
+
+async function loadProfilesIntoSelects() {
+    try {
+        const resp = await fetch(apiUrl('/api/profiles'), apiFetchOptions());
+        if (!resp.ok) return;
+        const data = await resp.json();
+        cachedProfiles = data.profiles || [];
+        ['rusprofile_ai_profile', 'yandex_ai_profile'].forEach((id) => {
+            const sel = document.getElementById(id);
+            if (!sel) return;
+            const cur = sel.value;
+            sel.innerHTML = '<option value="">Не использовать</option>'
+                + cachedProfiles.map((p) =>
+                    `<option value="${p.id}">${escapeHtml(p.name)}</option>`
+                ).join('');
+            if (cur) sel.value = cur;
+        });
+    } catch (err) {
+        console.error('Не удалось загрузить профили:', err);
+    }
+}
+
+// ─── Раздел «ИИ-профили»: список + двухшаговый UX ─────────────────────
+
+let editingProfile = { brief: '', name: '', extracted: null };
+
+async function loadProfilesList() {
+    if (currentTariff !== 'ai') {
+        document.getElementById('profiles-status').textContent =
+            'Раздел доступен только на тарифе AI.';
+        return;
+    }
+    const status = document.getElementById('profiles-status');
+    const list = document.getElementById('profiles-list');
+    status.textContent = 'Загрузка…';
+    list.innerHTML = '';
+    try {
+        const resp = await fetch(apiUrl('/api/profiles'), apiFetchOptions());
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        cachedProfiles = data.profiles || [];
+        if (cachedProfiles.length === 0) {
+            status.textContent = 'Профилей пока нет. Создайте первый.';
+            return;
+        }
+        status.textContent = '';
+        list.innerHTML = cachedProfiles.map((p) => `
+            <div class="profile-card">
+                <div class="profile-card-name">${escapeHtml(p.name)}</div>
+                <div class="profile-card-meta">
+                    Позитивных ключей: ${p.keywords_positive.length},
+                    негативных: ${p.keywords_negative.length}
+                </div>
+                <div class="profile-card-meta">
+                    ${escapeHtml((p.icp_description || '').slice(0, 120))}…
+                </div>
+                <div class="profile-card-actions">
+                    <button type="button" class="btn-secondary" onclick="deleteProfile(${p.id})">
+                        Удалить
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        status.textContent = 'Ошибка загрузки: ' + err.message;
+    }
+}
+
+window.deleteProfile = async function(id) {
+    if (!confirm('Удалить профиль?')) return;
+    try {
+        const resp = await fetch(
+            apiUrl(`/api/profiles/${id}`),
+            { ...apiFetchOptions(), method: 'DELETE' },
+        );
+        if (resp.ok) {
+            await loadProfilesList();
+            await loadProfilesIntoSelects();
+        } else {
+            tg.showAlert('Не удалось удалить.');
+        }
+    } catch (err) {
+        tg.showAlert('Сеть недоступна.');
+    }
+};
+
+function setupProfileForms() {
+    document.getElementById('profileNewBtn')?.addEventListener('click', () => {
+        editingProfile = { brief: '', name: '', extracted: null };
+        document.getElementById('profile_name').value = '';
+        document.getElementById('profile_brief').value = '';
+        document.getElementById('profileStep1').classList.remove('hidden');
+        document.getElementById('profileStep2').classList.add('hidden');
+        document.getElementById('profiles-list').classList.add('hidden');
+        document.getElementById('profileNewBtn').classList.add('hidden');
+    });
+    document.getElementById('profileCancelBtn')?.addEventListener('click', resetProfileUI);
+    document.getElementById('profileBackBtn')?.addEventListener('click', () => {
+        document.getElementById('profileStep2').classList.add('hidden');
+        document.getElementById('profileStep1').classList.remove('hidden');
+    });
+    document.getElementById('profileExtractBtn')?.addEventListener('click', extractProfile);
+    document.getElementById('profileSaveBtn')?.addEventListener('click', saveProfile);
+
+    // Добавление ключевых слов через Enter
+    document.getElementById('profilePosAdd')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const v = e.target.value.trim();
+            if (v) {
+                editingProfile.extracted.keywords_positive.push(v);
+                renderProfileChips();
+                e.target.value = '';
+            }
+        }
+    });
+    document.getElementById('profileNegAdd')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const v = e.target.value.trim();
+            if (v) {
+                editingProfile.extracted.keywords_negative.push(v);
+                renderProfileChips();
+                e.target.value = '';
+            }
+        }
+    });
+}
+
+function resetProfileUI() {
+    document.getElementById('profileStep1').classList.add('hidden');
+    document.getElementById('profileStep2').classList.add('hidden');
+    document.getElementById('profiles-list').classList.remove('hidden');
+    document.getElementById('profileNewBtn').classList.remove('hidden');
+    loadProfilesList();
+}
+
+async function extractProfile() {
+    const name = val('profile_name').trim();
+    const brief = val('profile_brief').trim();
+    if (!brief) {
+        tg.showAlert('Опишите бриф (минимум — кого ищете).');
+        return;
+    }
+    editingProfile.brief = brief;
+    editingProfile.name = name || 'Без названия';
+
+    const btn = document.getElementById('profileExtractBtn');
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'ИИ извлекает…';
+    try {
+        const resp = await fetch(apiUrl('/api/profiles/extract'), {
+            ...apiFetchOptions(),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ brief, name }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            tg.showAlert(err.message || 'Ошибка извлечения профиля.');
+            return;
+        }
+        const data = await resp.json();
+        editingProfile.extracted = {
+            icp_description: data.extracted.icp_description,
+            semantic_criteria: data.extracted.semantic_criteria,
+            keywords_positive: data.extracted.keywords_positive.slice(),
+            keywords_negative: data.extracted.keywords_negative.slice(),
+        };
+        renderProfileStep2();
+        document.getElementById('profileStep1').classList.add('hidden');
+        document.getElementById('profileStep2').classList.remove('hidden');
+    } catch (err) {
+        tg.showAlert('Сеть недоступна.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
+}
+
+function renderProfileStep2() {
+    const ex = editingProfile.extracted;
+    document.getElementById('profileIcp').textContent = ex.icp_description;
+    document.getElementById('profileCriteria').innerHTML =
+        ex.semantic_criteria.map((c) => `<li>${escapeHtml(c)}</li>`).join('');
+    renderProfileChips();
+}
+
+function renderProfileChips() {
+    const ex = editingProfile.extracted;
+    const renderChips = (containerId, arr, removeFn) => {
+        const cont = document.getElementById(containerId);
+        cont.innerHTML = arr.map((kw, i) => `
+            <span class="profile-chip">
+                ${escapeHtml(kw)}
+                <button type="button" data-idx="${i}" class="chip-x">×</button>
+            </span>
+        `).join('');
+        cont.querySelectorAll('.chip-x').forEach((b) => {
+            b.addEventListener('click', () => {
+                arr.splice(parseInt(b.dataset.idx, 10), 1);
+                renderProfileChips();
+            });
+        });
+    };
+    renderChips('profilePosKws', ex.keywords_positive);
+    renderChips('profileNegKws', ex.keywords_negative);
+}
+
+async function saveProfile() {
+    const ex = editingProfile.extracted;
+    const btn = document.getElementById('profileSaveBtn');
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Сохраняю…';
+    try {
+        const resp = await fetch(apiUrl('/api/profiles'), {
+            ...apiFetchOptions(),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: editingProfile.name,
+                brief: editingProfile.brief,
+                icp_description: ex.icp_description,
+                semantic_criteria: ex.semantic_criteria,
+                keywords_positive: ex.keywords_positive,
+                keywords_negative: ex.keywords_negative,
+            }),
+        });
+        if (!resp.ok) {
+            tg.showAlert('Не удалось сохранить профиль.');
+            return;
+        }
+        await loadProfilesIntoSelects();
+        resetProfileUI();
+    } catch (err) {
         tg.showAlert('Сеть недоступна.');
     } finally {
         btn.disabled = false;
@@ -839,6 +1214,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateYandexRegions();
     setupTabs();
     setupBottomNav();
+    setupProfileForms();
 
     document.getElementById('searchForm').addEventListener('submit', submitForm);
     const yandexForm = document.getElementById('yandexForm');
@@ -863,4 +1239,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Любая правка фильтров перезапускает валидацию.
     document.getElementById('searchForm').addEventListener('input', () => updateValidation());
     document.getElementById('searchForm').addEventListener('change', () => updateValidation());
+
+    // Этап 2 v3 — загружаем тариф и профили.
+    await loadTariff();
 });
