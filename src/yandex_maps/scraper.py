@@ -365,7 +365,32 @@ _JS_EXTRACT_DETAIL = r"""
   const m = location.href.match(/[?&]ll=([-\d.]+)%2C([-\d.]+)/);
   if (m) coordinates = m[2] + ',' + m[1];  // lat,lon — нормализуем порядок
 
-  return { phone, site, coordinates };
+  // ─── Этап 2 v3: дополнительные сигналы ─────────────────────────────
+  // hours_filled — заполнен ли блок «Режим работы» в карточке.
+  const hoursEl = card.querySelector(
+    '[class*="working-status"], [class*="business-working"], [class*="hours"]'
+  );
+  const hoursText = text(hoursEl);
+  const hours_filled = !!(hoursText && hoursText.length > 5);
+
+  // coordinates_filled — есть ли координаты (см. выше).
+  const coordinates_filled = !!coordinates;
+
+  // operating_status — мы можем понять по тексту в working-status:
+  //   «Закрыто навсегда» → permanently_closed
+  //   «Временно не работает» → temporarily_closed
+  //   иначе → working
+  let operating_status = 'working';
+  const wsLower = (hoursText || '').toLowerCase();
+  if (wsLower.includes('закрыто навсегда') || wsLower.includes('закрыта навсегда')) {
+    operating_status = 'permanently_closed';
+  } else if (wsLower.includes('временно') && (wsLower.includes('не работает') || wsLower.includes('закрыт'))) {
+    operating_status = 'temporarily_closed';
+  } else if (!hoursText) {
+    operating_status = null;  // не уверены
+  }
+
+  return { phone, site, coordinates, hours_filled, coordinates_filled, operating_status };
 }
 """
 

@@ -42,10 +42,10 @@
 
 ## Блок 2. Доработка парсера Я.Карт
 
-- [ ] **2.1** `src/yandex_maps/auth.py`: Playwright-логин, сохранение `storage_state` в `config/yandex_session.json`, переиспользование сессии.
-- [ ] **2.2** `src/yandex_maps/reviews.py`: `get_last_review_date(yandex_url, page)` + `parse_relative_date(text, today)` (форматы: «сегодня», «N дней назад», «23 апреля», «23 апреля 2024 г.»).
-- [ ] **2.3** Доработать `src/yandex_maps/parser.py` (или scraper.py): собирать `yandex_rating`, `yandex_reviews_count`, `yandex_last_review_date`, `yandex_hours_filled`, `yandex_coordinates_filled`, `yandex_url`, `yandex_operating_status`. Не ронять парсинг при сбое одной карточки.
-- [ ] **2.4** `tests/test_yandex_reviews.py` (форматы дат, синхронные парсеры) → commit `feat(yandex): дата последнего отзыва + расширенные сигналы карточки` → push.
+- [x] **2.1** `src/yandex_maps/auth.py`: Playwright-логин, сохранение `storage_state` в `config/yandex_session.json`, переиспользование сессии.
+- [x] **2.2** `src/yandex_maps/reviews.py`: `get_last_review_date(yandex_url, page)` + `parse_relative_date(text, today)` (форматы: «сегодня», «N дней назад», «23 апреля», «23 апреля 2024 г.»).
+- [x] **2.3** Доработать `src/yandex_maps/parser.py` (или scraper.py): собирать `yandex_rating`, `yandex_reviews_count`, `yandex_last_review_date`, `yandex_hours_filled`, `yandex_coordinates_filled`, `yandex_url`, `yandex_operating_status`. Не ронять парсинг при сбое одной карточки.
+- [x] **2.4** `tests/test_yandex_reviews.py` (форматы дат, синхронные парсеры) → commit `feat(yandex): дата последнего отзыва + расширенные сигналы карточки` → push.
 
 ## Блок 3. Кросс-обогащение источников
 
