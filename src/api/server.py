@@ -426,6 +426,12 @@ def build_app(bot: Bot | None = None) -> web.Application:
     app.router.add_post("/api/runs/{run_id}/repush", repush_to_sheets)
     app.router.add_get("/api/runs/{run_id}/xlsx", download_xlsx)
     app.router.add_post("/api/runs/{run_id}/send-xlsx", send_xlsx_to_chat)
+
+    # Этап 2 v3 — ИИ-профили и квалификация.
+    from src.api.profiles_router import register_profiles_routes
+    from src.api.tariff_router import register_tariff_routes
+    register_profiles_routes(app)
+    register_tariff_routes(app)
     return app
 
 

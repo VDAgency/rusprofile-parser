@@ -148,6 +148,8 @@ async def run_rusprofile(
     filters_for_theme: dict,
     max_new: int | None = None,
     progress_callback: Callable[[str], Awaitable[None]] | None = None,
+    ai_profile_id: int | None = None,
+    enable_cross_enrichment: bool = False,
 ) -> ParseResult:
     """Запускает парсинг Rusprofile с дедупом и записью в БД/Sheets.
 
@@ -285,6 +287,15 @@ async def run_rusprofile(
             run = session.get(ParseRun, run_id)
             run.sheet_url = sheet_url
 
+    # 5. Этап 2: запуск ИИ-квалификации (если запрошено)
+    if (ai_profile_id is not None or enable_cross_enrichment) and persisted_companies:
+        await _trigger_qualify(
+            run_id=run_id, tenant_id=tenant_id,
+            profile_id=ai_profile_id,
+            enable_cross_enrichment=enable_cross_enrichment,
+            progress_callback=progress_callback,
+        )
+
     return ParseResult(
         run_id=run_id,
         total_new=len(persisted_companies),
@@ -293,6 +304,39 @@ async def run_rusprofile(
         status=RunStatus.DONE.value if not error_message else RunStatus.ERROR.value,
         error_message=error_message,
     )
+
+
+async def _trigger_qualify(
+    *,
+    run_id: int,
+    tenant_id: int,
+    profile_id: int | None,
+    enable_cross_enrichment: bool,
+    progress_callback: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
+    """Хелпер: запуск qualify_run после успешного парсинга.
+
+    Импорт сделан внутри, чтобы не создать циклической зависимости при
+    подгрузке `parse_service`.
+    """
+    try:
+        from src.services import qualify_service
+
+        async def _qprogress(done, total):
+            if progress_callback:
+                await progress_callback(
+                    f"ИИ-квалификация: {done} / {total} компаний…"
+                )
+
+        await qualify_service.qualify_run(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            profile_id=profile_id,
+            enable_cross_enrichment=enable_cross_enrichment,
+            progress_cb=_qprogress,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Trigger qualify failed for run_id=%s: %s", run_id, e)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +352,8 @@ async def run_yandex(
     category: str,
     max_new: int | None = None,
     progress_callback: Callable[[str], Awaitable[None]] | None = None,
+    ai_profile_id: int | None = None,
+    enable_cross_enrichment: bool = False,
 ) -> ParseResult:
     max_new_clamped = _clamp_max_new(max_new)
 
@@ -558,6 +604,15 @@ async def run_yandex(
         with get_session() as session:
             run = session.get(ParseRun, run_id)
             run.sheet_url = sheet_url
+
+    # Этап 2: запуск ИИ-квалификации (если запрошено)
+    if (ai_profile_id is not None or enable_cross_enrichment) and persisted_places:
+        await _trigger_qualify(
+            run_id=run_id, tenant_id=tenant_id,
+            profile_id=ai_profile_id,
+            enable_cross_enrichment=enable_cross_enrichment,
+            progress_callback=progress_callback,
+        )
 
     return ParseResult(
         run_id=run_id,

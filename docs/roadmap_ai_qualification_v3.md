@@ -69,10 +69,10 @@
 
 ## Блок 5. Оркестрация и API
 
-- [ ] **5.1** `src/services/qualify_service.py` — `qualify_run(run_id, tenant_id, profile_id, enable_cross_enrichment, force)`, тариф-aware ветвление (Simple/AI), хард-лимит 300, `Semaphore`-ы по стадиям, структурированный JSONL-лог.
-- [ ] **5.2** `src/api/tariff_router.py` (`GET /api/tariff`) + `POST /api/runs/{id}/qualify`.
-- [ ] **5.3** Интеграция в `src/services/parse_service.py`: после `run_rusprofile` / `run_yandex` запуск `qualify_run` если в payload `ai_profile_id` или `enable_cross_enrichment=True`.
-- [ ] **5.4** `tests/test_qualify_service.py` (интеграционный, end-to-end с моками) → commit `feat(ai): qualify_service + API эндпоинты квалификации/тарифа` → push.
+- [x] **5.1** `src/services/qualify_service.py` — `qualify_run(run_id, tenant_id, profile_id, enable_cross_enrichment, force)`, тариф-aware ветвление (Simple/AI), хард-лимит 300, `Semaphore`-ы по стадиям, структурированный JSONL-лог.
+- [x] **5.2** `src/api/tariff_router.py` (`GET /api/tariff`) + `POST /api/runs/{id}/qualify`.
+- [x] **5.3** Интеграция в `src/services/parse_service.py`: после `run_rusprofile` / `run_yandex` запуск `qualify_run` если в payload `ai_profile_id` или `enable_cross_enrichment=True`.
+- [x] **5.4** `tests/test_qualify_service.py` (интеграционный, end-to-end с моками) → commit `feat(ai): qualify_service + API эндпоинты квалификации/тарифа` → push.
 
 ## Блок 6. Sheets + Mini App
 
