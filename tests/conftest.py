@@ -25,6 +25,11 @@ def db_session(monkeypatch, tmp_path):
     importlib.reload(mdl)
     import src.db.dedup as ddp
     importlib.reload(ddp)
+    # __init__ держит закешированные ссылки на старые классы — без
+    # его reload тесты, импортирующие `from src.db import ...`,
+    # работают со «смешанным» состоянием mapper-ов.
+    import src.db as _db_pkg
+    importlib.reload(_db_pkg)
 
     ses.Base.metadata.create_all(bind=ses.engine)
 

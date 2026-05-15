@@ -14,6 +14,9 @@ from src.db.models import (
     RunCompany,
     RunStatus,
     Source,
+    AIProfile,
+    AIStatus,
+    TariffPlan,
 )
 from src.db.normalize import normalize_phone, format_phone_for_display
 from src.db.dedup import (
@@ -40,6 +43,9 @@ __all__ = [
     "RunCompany",
     "RunStatus",
     "Source",
+    "AIProfile",
+    "AIStatus",
+    "TariffPlan",
     "normalize_phone",
     "format_phone_for_display",
     "canonicalize_filters",

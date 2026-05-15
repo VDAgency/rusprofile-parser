@@ -1,18 +1,26 @@
-"""Модели БД: Tenant / Theme / Company / ParseRun / RunCompany.
+"""Модели БД: Tenant / Theme / Company / ParseRun / RunCompany / AIProfile.
 
 Multi-tenancy: каждая запись принадлежит ``tenant`` (Telegram-юзер).
 Под SaaS: добавится таблица users-orgs, tenant.id будет тот же.
+
+Этап 2 (v3) добавил:
+- Тарифы и квоты в Tenant (Simple/AI).
+- Я.Карты-сигналы и кросс-обогащение в Company.
+- ИИ-поля в Company (статус, балл, комментарий, сигналы, hook, токены).
+- Связь Company → AIProfile, ParseRun → AIProfile.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -39,6 +47,19 @@ class RunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class TariffPlan(str, Enum):
+    SIMPLE = "simple"
+    AI = "ai"
+
+
+class AIStatus(str, Enum):
+    HOT = "hot"
+    COLD = "cold"
+    SKIP = "skip"
+    UNKNOWN = "unknown"
+    QUOTA_EXCEEDED = "quota_exceeded"
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
 
@@ -54,9 +75,29 @@ class Tenant(Base):
         DateTime, server_default=func.now(), nullable=False
     )
 
+    # ─── Тариф и квоты (Этап 2 v3) ────────────────────────────────────
+    tariff_plan: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=TariffPlan.SIMPLE.value,
+        server_default="simple",
+    )
+    ai_quota_companies_monthly: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    ai_quota_tokens_monthly: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    ai_companies_processed_period: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    ai_tokens_used_period: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    quota_period_start: Mapped[datetime | None] = mapped_column(DateTime)
+
     themes: Mapped[list["Theme"]] = relationship(back_populates="tenant")
     companies: Mapped[list["Company"]] = relationship(back_populates="tenant")
     runs: Mapped[list["ParseRun"]] = relationship(back_populates="tenant")
+    ai_profiles: Mapped[list["AIProfile"]] = relationship(back_populates="tenant")
 
 
 class Theme(Base):
@@ -91,6 +132,53 @@ class Theme(Base):
             "tenant_id", "filters_hash", name="uq_theme_tenant_hash"
         ),
         Index("ix_theme_tenant_last_used", "tenant_id", "last_used_at"),
+    )
+
+
+class AIProfile(Base):
+    """Профиль квалификации — бриф клиента + извлечённые из него
+    ICP, критерии и ключевые слова.
+
+    Создаётся через Stage A (LLM-извлечение). Кешируется по `brief_hash`,
+    чтобы повторное создание профиля с тем же текстом не вызывало LLM.
+    """
+
+    __tablename__ = "ai_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    brief: Mapped[str] = mapped_column(Text, nullable=False)
+    brief_hash: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+
+    icp_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    semantic_criteria: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    keywords_positive: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    keywords_negative: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    extraction_model: Mapped[str | None] = mapped_column(String(50))
+    extraction_tokens_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+
+    tenant: Mapped[Tenant] = relationship(back_populates="ai_profiles")
+
+    __table_args__ = (
+        Index("ix_ai_profiles_tenant_active", "tenant_id", "is_active"),
     )
 
 
@@ -134,6 +222,36 @@ class Company(Base):
         DateTime, server_default=func.now(), nullable=False
     )
 
+    # ─── Я.Карты-сигналы (Этап 2 v3) ──────────────────────────────────
+    yandex_rating: Mapped[float | None] = mapped_column(Float)
+    yandex_reviews_count: Mapped[int | None] = mapped_column(Integer)
+    yandex_last_review_date: Mapped[date | None] = mapped_column(Date)
+    yandex_hours_filled: Mapped[bool | None] = mapped_column(Boolean)
+    yandex_coordinates_filled: Mapped[bool | None] = mapped_column(Boolean)
+    yandex_url: Mapped[str | None] = mapped_column(String(500))
+    yandex_operating_status: Mapped[str | None] = mapped_column(String(30))
+
+    # ─── Кросс-обогащение источников ─────────────────────────────────
+    cross_enriched_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cross_enrichment_source: Mapped[str | None] = mapped_column(String(20))
+    cross_match_confidence: Mapped[float | None] = mapped_column(Float)
+
+    # ─── ИИ-квалификация ─────────────────────────────────────────────
+    ai_score: Mapped[int | None] = mapped_column(Integer)
+    ai_status: Mapped[str | None] = mapped_column(String(20))
+    ai_comment: Mapped[str | None] = mapped_column(Text)
+    ai_signals: Mapped[list | None] = mapped_column(JSON)
+    ai_hook: Mapped[str | None] = mapped_column(Text)
+    ai_keyword_matches_positive: Mapped[list | None] = mapped_column(JSON)
+    ai_keyword_matches_negative: Mapped[list | None] = mapped_column(JSON)
+    ai_tokens_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    ai_qualified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    ai_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_profiles.id", ondelete="SET NULL")
+    )
+
     tenant: Mapped[Tenant] = relationship(back_populates="companies")
     run_links: Mapped[list["RunCompany"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
@@ -143,6 +261,8 @@ class Company(Base):
         Index("ix_company_tenant_inn", "tenant_id", "inn"),
         Index("ix_company_tenant_ogrn", "tenant_id", "ogrn"),
         Index("ix_company_tenant_phone", "tenant_id", "phone_normalized"),
+        Index("ix_company_ai_status", "tenant_id", "ai_status"),
+        Index("ix_company_yandex_url", "yandex_url"),
     )
 
 
@@ -172,6 +292,18 @@ class ParseRun(Base):
     total_new: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sheet_url: Mapped[str | None] = mapped_column(Text)
+
+    # ─── Этап 2 v3: квалификация ──────────────────────────────────────
+    ai_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_profiles.id", ondelete="SET NULL")
+    )
+    ai_qualify_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    ai_qualify_stats: Mapped[dict | None] = mapped_column(JSON)
+    enable_cross_enrichment: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
 
     tenant: Mapped[Tenant] = relationship(back_populates="runs")
     theme: Mapped[Theme] = relationship(back_populates="runs")
