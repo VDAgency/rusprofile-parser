@@ -103,12 +103,15 @@ async def test_complete_json_api_error_returns_error_result():
 
 
 def test_from_env_returns_none_without_key(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setenv("AI_PROVIDER", "openai")
-    # Перезагружаем config, чтобы он подхватил пустые ключи.
-    import importlib
-    import src.config
-    importlib.reload(src.config)
+    """Без ключа .from_env() должен вернуть None.
+
+    Патчим напрямую атрибуты ``src.config``, потому что load_dotenv
+    перетирает env vars из системы значениями из .env-файла (а в проде
+    туда уже добавлен реальный ключ).
+    """
+    import src.config as cfg
+    monkeypatch.setattr(cfg, "OPENAI_API_KEY", "", raising=False)
+    monkeypatch.setattr(cfg, "OPENROUTER_API_KEY", "", raising=False)
+    monkeypatch.setattr(cfg, "AI_PROVIDER", "openai", raising=False)
     client = AsyncLLMClient.from_env()
     assert client is None

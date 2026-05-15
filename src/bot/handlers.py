@@ -193,6 +193,10 @@ async def handle_webapp_data(message: Message):
         source = data.get("source", "rusprofile")
         max_new = _clamp_max_new(_parse_int(data.get("max_new")))
 
+        # Этап 2 v3 — необязательные поля для квалификации.
+        ai_profile_id = _parse_int(data.get("ai_profile_id")) or None
+        enable_cross_enrichment = bool(data.get("enable_cross_enrichment"))
+
         if source == "yandex_maps":
             region = (data.get("region") or "").strip()
             category = (data.get("category") or "").strip()
@@ -207,7 +211,11 @@ async def handle_webapp_data(message: Message):
                 f"(до {max_new} новых)..."
             )
             task = asyncio.create_task(
-                _run_yandex(message, region, category, max_new)
+                _run_yandex(
+                    message, region, category, max_new,
+                    ai_profile_id=ai_profile_id,
+                    enable_cross_enrichment=enable_cross_enrichment,
+                )
             )
             _active_tasks[user_id] = task
             return
@@ -276,7 +284,11 @@ async def handle_webapp_data(message: Message):
             f"Запускаю парсинг (лимит — {max_new} новых компаний)..."
         )
         task = asyncio.create_task(
-            _run_rusprofile(message, filters, raw_filters, max_new)
+            _run_rusprofile(
+                message, filters, raw_filters, max_new,
+                ai_profile_id=ai_profile_id,
+                enable_cross_enrichment=enable_cross_enrichment,
+            )
         )
         _active_tasks[user_id] = task
 
@@ -292,6 +304,9 @@ async def _run_rusprofile(
     filters: SearchFilters,
     filters_for_theme: dict,
     max_new: int,
+    *,
+    ai_profile_id: int | None = None,
+    enable_cross_enrichment: bool = False,
 ):
     """Запускает Rusprofile-парсинг через сервис."""
     status_msg = await message.answer("Подключаюсь к Rusprofile...")
@@ -310,6 +325,8 @@ async def _run_rusprofile(
             filters_for_theme=filters_for_theme,
             max_new=max_new,
             progress_callback=progress,
+            ai_profile_id=ai_profile_id,
+            enable_cross_enrichment=enable_cross_enrichment,
         )
 
         if result.status == "error":
@@ -349,6 +366,9 @@ async def _run_yandex(
     region: str,
     category: str,
     max_new: int,
+    *,
+    ai_profile_id: int | None = None,
+    enable_cross_enrichment: bool = False,
 ):
     """Запускает Яндекс.Карты-парсинг через сервис."""
     status_msg = await message.answer("Подключаюсь к Яндекс Картам...")
@@ -365,6 +385,8 @@ async def _run_yandex(
             username=message.from_user.username,
             region=region,
             category=category,
+            ai_profile_id=ai_profile_id,
+            enable_cross_enrichment=enable_cross_enrichment,
             max_new=max_new,
             progress_callback=progress,
         )

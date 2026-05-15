@@ -121,24 +121,34 @@ async def qualify_run_endpoint(request: web.Request) -> web.Response:
         )
 
     # Запускаем в фоне через asyncio.create_task (тот же event loop, что aiogram/aiohttp).
-    from src.services import qualify_service
+    # Используем тот же helper, что и автозапуск из parse_service —
+    # он сам поднимет Playwright + finder-ы для кросс-обогащения, если
+    # enable_cross_enrichment=True.
+    from src.services.parse_service import _trigger_qualify
 
     async def _runner():
         try:
-            stats = await qualify_service.qualify_run(
-                run_id=run_id,
-                tenant_id=tenant_id,
-                profile_id=profile_id,
+            await _trigger_qualify(
+                run_id=run_id, tenant_id=tenant_id, profile_id=profile_id,
                 enable_cross_enrichment=enable_cross_enrichment,
-                force=force,
             )
-            logger.info(
-                "qualify_run completed: run_id=%s, total=%s, by_status=%s",
-                run_id, stats.total, stats.by_status,
-            )
-            # Шлём в Telegram сводку.
+            # Сводку в Telegram отправляем по факту завершения.
             bot = request.app.get("bot")
             if bot is not None:
+                # Перечитываем статистику из БД, т.к. _trigger_qualify
+                # её не возвращает.
+                from src.db import get_session
+                from src.db.models import ParseRun
+                with get_session() as session:
+                    run = session.get(ParseRun, run_id)
+                    stats_dict = (run.ai_qualify_stats or {}) if run else {}
+
+                from types import SimpleNamespace
+                stats = SimpleNamespace(
+                    by_status=stats_dict.get("by_status", {}),
+                    tokens_used_total=stats_dict.get("tokens_used_total", 0),
+                    cost_rub_estimate=stats_dict.get("cost_rub_estimate", 0.0),
+                )
                 await _send_summary_to_bot(bot, user_id, run_id, stats)
         except Exception as e:  # noqa: BLE001
             logger.exception("qualify_run failed: %s", e)

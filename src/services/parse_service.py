@@ -316,8 +316,11 @@ async def _trigger_qualify(
 ) -> None:
     """Хелпер: запуск qualify_run после успешного парсинга.
 
-    Импорт сделан внутри, чтобы не создать циклической зависимости при
-    подгрузке `parse_service`.
+    Если ``enable_cross_enrichment=True`` — открывает свой Playwright-контекст
+    и подключает реальные finder-ы поверх существующих парсеров. Иначе —
+    qualify_run работает без кросс-обогащения (finder-ы None).
+
+    Импорт сделан внутри, чтобы не создать циклической зависимости.
     """
     try:
         from src.services import qualify_service
@@ -328,13 +331,59 @@ async def _trigger_qualify(
                     f"ИИ-квалификация: {done} / {total} компаний…"
                 )
 
-        await qualify_service.qualify_run(
-            run_id=run_id,
-            tenant_id=tenant_id,
-            profile_id=profile_id,
-            enable_cross_enrichment=enable_cross_enrichment,
-            progress_cb=_qprogress,
+        if not enable_cross_enrichment:
+            await qualify_service.qualify_run(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                enable_cross_enrichment=False,
+                progress_cb=_qprogress,
+            )
+            return
+
+        # Кросс-обогащение включено → нужен Playwright + аутентифицированный
+        # Rusprofile-контекст для Direction 2. Direction 1 (поиск на Я.Картах)
+        # тот же контекст переиспользует — Я.Карты не требуют авторизации
+        # для базового поиска.
+        from playwright.async_api import async_playwright
+        from src.rusprofile.auth import get_authenticated_context
+        from src.services.cross_enrichment_finders import (
+            make_rusprofile_finder,
+            make_yandex_finder,
         )
+
+        async with async_playwright() as pw:
+            try:
+                context = await get_authenticated_context(pw)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Не удалось открыть аутентифицированный контекст для "
+                    "кросс-обогащения: %s — запускаю qualify без enrichment",
+                    e,
+                )
+                await qualify_service.qualify_run(
+                    run_id=run_id, tenant_id=tenant_id, profile_id=profile_id,
+                    enable_cross_enrichment=False, progress_cb=_qprogress,
+                )
+                return
+
+            try:
+                yandex_finder = make_yandex_finder(context)
+                rusprofile_finder = make_rusprofile_finder(context)
+                await qualify_service.qualify_run(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    profile_id=profile_id,
+                    enable_cross_enrichment=True,
+                    yandex_finder=yandex_finder,
+                    rusprofile_finder=rusprofile_finder,
+                    progress_cb=_qprogress,
+                )
+            finally:
+                try:
+                    await context.browser.close()
+                except Exception:  # noqa: BLE001
+                    pass
     except Exception as e:  # noqa: BLE001
         logger.exception("Trigger qualify failed for run_id=%s: %s", run_id, e)
 
