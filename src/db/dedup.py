@@ -127,7 +127,22 @@ def ensure_tenant(
         select(Tenant).where(Tenant.telegram_user_id == telegram_user_id)
     )
     if tenant is None:
-        tenant = Tenant(telegram_user_id=telegram_user_id, username=username)
+        # Этап 3: новый tenant получает Trial (7 дней / 10 парсингов).
+        # Существующих tenant'ов миграция НЕ трогает — они остаются на
+        # legacy `simple` / `ai` (бессрочно).
+        from datetime import timedelta
+        from src.config import TRIAL_DAYS, TRIAL_PARSES_LIMIT
+        from src.db.models import TariffPlan
+
+        now = datetime.now(timezone.utc)
+        tenant = Tenant(
+            telegram_user_id=telegram_user_id,
+            username=username,
+            tariff_plan=TariffPlan.TRIAL.value,
+            trial_started_at=now,
+            trial_expires_at=now + timedelta(days=TRIAL_DAYS),
+            trial_parses_left=TRIAL_PARSES_LIMIT,
+        )
         session.add(tenant)
         session.flush()
     elif username and tenant.username != username:

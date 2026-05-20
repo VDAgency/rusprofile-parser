@@ -17,6 +17,11 @@ from src.db.models import (
     AIProfile,
     AIStatus,
     TariffPlan,
+    Subscription,
+    Payment,
+    SubscriptionStatus,
+    PaymentStatus,
+    BlockedReason,
 )
 from src.db.normalize import normalize_phone, format_phone_for_display
 from src.db.dedup import (
@@ -46,6 +51,11 @@ __all__ = [
     "AIProfile",
     "AIStatus",
     "TariffPlan",
+    "Subscription",
+    "Payment",
+    "SubscriptionStatus",
+    "PaymentStatus",
+    "BlockedReason",
     "normalize_phone",
     "format_phone_for_display",
     "canonicalize_filters",

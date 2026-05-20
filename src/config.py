@@ -59,6 +59,20 @@ DEFAULT_TARIFF_PLAN = os.getenv("DEFAULT_TARIFF_PLAN", "simple")
 DEFAULT_AI_QUOTA_COMPANIES = int(os.getenv("DEFAULT_AI_QUOTA_COMPANIES", "1000"))
 DEFAULT_AI_QUOTA_TOKENS = int(os.getenv("DEFAULT_AI_QUOTA_TOKENS", "10000000"))
 TARIFF_PERIOD_DAYS = int(os.getenv("TARIFF_PERIOD_DAYS", "30"))
+
+# Этап 3 — Trial и тарифы
+TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "7"))
+TRIAL_PARSES_LIMIT = int(os.getenv("TRIAL_PARSES_LIMIT", "10"))
+# Цены (0 = «цена не настроена», создание платежа отдаст 400)
+BASIC_PRICE_RUB = int(os.getenv("BASIC_PRICE_RUB", "0"))
+PRO_PRICE_RUB = int(os.getenv("PRO_PRICE_RUB", "0"))
+# Подписка
+SUBSCRIPTION_PERIOD_DAYS = int(os.getenv("SUBSCRIPTION_PERIOD_DAYS", "30"))
+SUBSCRIPTION_GRACE_DAYS = int(os.getenv("SUBSCRIPTION_GRACE_DAYS", "5"))
+RENEWAL_REMINDER_DAYS = int(os.getenv("RENEWAL_REMINDER_DAYS", "3"))
+# Soft-лимиты на запуски парсинга (защита от абуза, не для счёта Trial)
+BASIC_PARSES_SOFT_LIMIT = int(os.getenv("BASIC_PARSES_SOFT_LIMIT", "100"))
+PRO_PARSES_SOFT_LIMIT = int(os.getenv("PRO_PARSES_SOFT_LIMIT", "300"))
 # Стоимость для оценки
 AI_COST_PER_1K_INPUT_RUB = float(os.getenv("AI_COST_PER_1K_INPUT_RUB", "0.015"))
 AI_COST_PER_1K_OUTPUT_RUB = float(os.getenv("AI_COST_PER_1K_OUTPUT_RUB", "0.06"))

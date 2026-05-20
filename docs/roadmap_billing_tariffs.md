@@ -20,7 +20,7 @@
 
 ## Блок 1. Фундамент: БД и helper-ы
 
-- [ ] **1.1** Alembic-миграция `add_billing`:
+- [x] **1.1** Alembic-миграция `add_billing`:
   - Поля в `tenants`: `trial_started_at`, `trial_expires_at`,
     `trial_parses_left`, `parses_used_period`, `active_subscription_id`,
     `is_blocked`, `blocked_reason`.
@@ -30,15 +30,17 @@
     error_*).
   - Индексы: `ix_subscriptions_tenant_active`, `ix_subscriptions_expires`,
     `ix_payments_tenant`.
-- [ ] **1.2** Обновить SQLAlchemy-модели: `Tenant` (расширение),
+- [x] **1.2** Обновить SQLAlchemy-модели: `Tenant` (расширение),
   `Subscription`, `Payment`, ENUM-ы `TariffPlan` (+TRIAL/TRIAL_EXPIRED/
-  BASIC/PRO), `SubscriptionStatus`, `PaymentStatus`.
-- [ ] **1.3** `src/services/tariff_helpers.py`: `is_ai_available`,
-  `is_parsing_available`, `is_paid_plan` + тесты `test_tariff_helpers.py`.
-- [ ] **1.4** Обновить `src/db/dedup.py::ensure_tenant` — новый tenant
+  BASIC/PRO), `SubscriptionStatus`, `PaymentStatus`, `BlockedReason`.
+- [x] **1.3** `src/services/tariff_helpers.py`: `is_ai_available`,
+  `is_parsing_available`, `is_paid_plan`, `get_trial_snapshot` +
+  тесты `test_tariff_helpers.py` (22 шт.).
+- [x] **1.4** Обновить `src/db/dedup.py::ensure_tenant` — новый tenant
   создаётся с `tariff_plan='trial'`, `trial_started_at=now`,
   `trial_expires_at=now+TRIAL_DAYS`, `trial_parses_left=TRIAL_PARSES_LIMIT`.
-- [ ] **1.5** `pytest` зелёное → commit `feat(billing): фундамент — миграция, модели, tariff_helpers, Trial по умолчанию для новых tenant'ов` → push.
+  Существующие tenant'ы не трогаются. Тесты `test_ensure_tenant_trial.py`.
+- [x] **1.5** `pytest tests/` → 282 passed → commit `feat(billing): фундамент — миграция, модели, tariff_helpers, Trial по умолчанию для новых tenant'ов` → push.
 
 ## Блок 2. ЮKassa wrapper + payment_service
 

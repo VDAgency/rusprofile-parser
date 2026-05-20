@@ -48,8 +48,36 @@ class RunStatus(str, Enum):
 
 
 class TariffPlan(str, Enum):
+    # Legacy (до Этапа 3) — приравниваются к BASIC / PRO «бессрочно»:
     SIMPLE = "simple"
     AI = "ai"
+    # Этап 3:
+    TRIAL = "trial"
+    TRIAL_EXPIRED = "trial_expired"
+    BASIC = "basic"
+    PRO = "pro"
+
+
+class SubscriptionStatus(str, Enum):
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class PaymentStatus(str, Enum):
+    PENDING = "pending"
+    WAITING_FOR_CAPTURE = "waiting_for_capture"
+    SUCCEEDED = "succeeded"
+    CANCELED = "canceled"
+
+
+class BlockedReason(str, Enum):
+    TRIAL_EXPIRED_DAYS = "trial_expired_days"
+    TRIAL_EXPIRED_PARSES = "trial_expired_parses"
+    SUBSCRIPTION_PAST_DUE = "subscription_past_due"
+    SUBSCRIPTION_BLOCKED = "subscription_blocked"
+    SUBSCRIPTION_CANCELLED = "subscription_cancelled"
 
 
 class AIStatus(str, Enum):
@@ -94,10 +122,36 @@ class Tenant(Base):
     )
     quota_period_start: Mapped[datetime | None] = mapped_column(DateTime)
 
+    # ─── Этап 3 v1: Trial и блокировка ────────────────────────────────
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    trial_parses_left: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    parses_used_period: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    active_subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "subscriptions.id",
+            ondelete="SET NULL",
+            name="fk_tenants_active_subscription_id",
+        )
+    )
+    is_blocked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    blocked_reason: Mapped[str | None] = mapped_column(String(50))
+
     themes: Mapped[list["Theme"]] = relationship(back_populates="tenant")
     companies: Mapped[list["Company"]] = relationship(back_populates="tenant")
     runs: Mapped[list["ParseRun"]] = relationship(back_populates="tenant")
     ai_profiles: Mapped[list["AIProfile"]] = relationship(back_populates="tenant")
+    subscriptions: Mapped[list["Subscription"]] = relationship(
+        back_populates="tenant",
+        foreign_keys="Subscription.tenant_id",
+    )
+    payments: Mapped[list["Payment"]] = relationship(back_populates="tenant")
 
 
 class Theme(Base):
@@ -329,3 +383,116 @@ class RunCompany(Base):
     __table_args__ = (
         Index("ix_runcompany_company", "company_id"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Этап 3 v1: Подписки и платежи
+# ---------------------------------------------------------------------------
+
+
+class Subscription(Base):
+    """Подписка на платный тариф (Basic / Pro).
+
+    Lifecycle: ACTIVE → (auto_renew=True → renew) или EXPIRED.
+    Если автосписание не прошло — PAST_DUE на grace-период, затем
+    EXPIRED + блок tenant'а.
+    """
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "tenants.id", ondelete="CASCADE",
+            name="fk_subscriptions_tenant_id",
+        ),
+        nullable=False, index=True,
+    )
+
+    tariff_plan: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    auto_renew: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+
+    # ЮKassa
+    yookassa_payment_method_id: Mapped[str | None] = mapped_column(String(64))
+
+    # Метаданные
+    price_rub: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="RUB", server_default="RUB"
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    tenant: Mapped["Tenant"] = relationship(
+        back_populates="subscriptions",
+        foreign_keys=[tenant_id],
+    )
+    payments: Mapped[list["Payment"]] = relationship(back_populates="subscription")
+
+    __table_args__ = (
+        Index("ix_subscriptions_tenant_active", "tenant_id", "status"),
+        Index("ix_subscriptions_expires", "expires_at", "status"),
+    )
+
+
+class Payment(Base):
+    """Один платёж через ЮKassa.
+
+    Может быть привязан к subscription (продление подписки или первичная
+    оплата) или быть отдельным (например, разовый).
+    """
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "tenants.id", ondelete="CASCADE",
+            name="fk_payments_tenant_id",
+        ),
+        nullable=False, index=True,
+    )
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "subscriptions.id", ondelete="SET NULL",
+            name="fk_payments_subscription_id",
+        )
+    )
+
+    # ЮKassa
+    yookassa_payment_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True
+    )
+    yookassa_idempotence_key: Mapped[str | None] = mapped_column(String(64))
+    yookassa_status: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    amount_rub: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="RUB", server_default="RUB"
+    )
+    description: Mapped[str | None] = mapped_column(Text)
+    # Имя `payment_metadata` (а не `metadata`) — потому что `metadata`
+    # зарезервировано в SQLAlchemy DeclarativeBase.
+    payment_metadata: Mapped[dict | None] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    recurrent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    error_code: Mapped[str | None] = mapped_column(String(50))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    tenant: Mapped["Tenant"] = relationship(back_populates="payments")
+    subscription: Mapped["Subscription | None"] = relationship(back_populates="payments")
