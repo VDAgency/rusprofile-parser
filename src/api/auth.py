@@ -52,10 +52,10 @@ def parse_init_data(init_data: str) -> dict | None:
         )
         return None
 
-    # Telegram с весны 2024 добавил поле `signature` — оно для
-    # third-party валидации (Ed25519 подпись от Telegram), и в
-    # HMAC-проверке его НЕ учитывают. Исключаем так же, как hash.
-    pairs.pop("signature", None)
+    # ВАЖНО: поле `signature` (появилось весной 2024 для third-party
+    # валидации через Ed25519) ВКЛЮЧАЕТСЯ в HMAC-проверку — Telegram
+    # его учитывает при подсчёте hash. Не исключать!
+    # См. aiogram.utils.web_app.check_webapp_signature как референс.
 
     # auth_date — unix timestamp в строке
     auth_date_raw = pairs.get("auth_date")
@@ -84,8 +84,9 @@ def parse_init_data(init_data: str) -> dict | None:
 
     if not hmac.compare_digest(expected, received_hash):
         logger.warning(
-            "initData hash mismatch. Ключи в data_check: %s; age=%.0fs",
-            sorted(pairs.keys()), age,
+            "initData hash mismatch. Ключи в data_check: %s; age=%.0fs; "
+            "has_signature=%s",
+            sorted(pairs.keys()), age, "signature" in pairs,
         )
         return None
 

@@ -13,8 +13,13 @@ TEST_BOT_TOKEN = "1234567890:TEST_TOKEN_FOR_TESTS"
 
 
 def _build_init_data(user_id: int, username: str = "tester",
-                     auth_date: int | None = None) -> str:
-    """Симулирует то, что Telegram пришлёт в Mini App."""
+                     auth_date: int | None = None,
+                     signature: str | None = None) -> str:
+    """Симулирует то, что Telegram пришлёт в Mini App.
+
+    Если ``signature`` передан — она включается в HMAC-проверку,
+    как это и делает реальный Telegram Web с 2024 года.
+    """
     auth_date = auth_date or int(time.time())
     user = {"id": user_id, "username": username, "first_name": "Test"}
     pairs = {
@@ -22,6 +27,8 @@ def _build_init_data(user_id: int, username: str = "tester",
         "query_id": "AAA-test",
         "user": json.dumps(user, separators=(",", ":")),
     }
+    if signature is not None:
+        pairs["signature"] = signature
     data_check = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs.keys()))
     secret = hmac.new(b"WebAppData", TEST_BOT_TOKEN.encode(), hashlib.sha256).digest()
     h = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
@@ -73,12 +80,27 @@ def test_empty_init_data_rejected(patched_token):
     assert patched_token.get_user_id(None) is None
 
 
-def test_signature_field_does_not_break_hmac(patched_token):
+def test_signature_field_included_in_hmac(patched_token):
     """Telegram с 2024 добавил в initData поле `signature` (Ed25519,
-    для third-party валидации). Оно НЕ участвует в HMAC-проверке
-    хеша — иначе валидные initData с современных клиентов отвергаются.
+    для third-party валидации). Оно ВКЛЮЧАЕТСЯ в HMAC-расчёт хеша
+    наравне с остальными полями — Telegram учитывает её при подсчёте
+    `hash`, и мы тоже должны.
+
+    Этот тест регресс-фиксирует баг с Telegram Web: ранее код делал
+    `pairs.pop("signature")` перед расчётом, и initData от Web (где
+    signature всегда есть) отвергался с hash mismatch.
     """
+    # signature участвовала в подсчёте hash — должно пройти.
+    init = _build_init_data(
+        user_id=42, username="vasya",
+        signature="Ed25519FakeSignature_payload-here",
+    )
+    assert patched_token.get_user_id(init) == 42
+
+
+def test_signature_appended_after_hash_is_rejected(patched_token):
+    """Защита от подделки: если signature дописана после подсчёта hash —
+    HMAC не сойдётся и initData должен быть отвергнут."""
     init = _build_init_data(user_id=42, username="vasya")
-    # Эмулируем то, что добавляет современный Telegram-клиент.
-    tampered = init + "&signature=Ed25519FakeSignature_payload-here"
-    assert patched_token.get_user_id(tampered) == 42
+    tampered = init + "&signature=fake"
+    assert patched_token.get_user_id(tampered) is None

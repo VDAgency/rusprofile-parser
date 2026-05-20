@@ -563,6 +563,15 @@ function getFormData() {
     };
 }
 
+// Telegram Web НЕ закрывает Mini App автоматически после sendData
+// (на Desktop/Mobile закрывает) — старая сессия с тем же initData остаётся
+// открытой, и второй submit зависает. Явный tg.close() решает проблему:
+// при следующем открытии Telegram выдаст новый initData.
+function _submitAndClose(payload) {
+    tg.sendData(JSON.stringify(payload));
+    try { tg.close(); } catch (_) { /* старые версии WebApp API */ }
+}
+
 function submitForm(e) {
     e.preventDefault();
     if (!updateValidation()) {
@@ -575,7 +584,7 @@ function submitForm(e) {
     const aiProfile = val('rusprofile_ai_profile');
     if (aiProfile) data.ai_profile_id = parseInt(aiProfile, 10);
     data.enable_cross_enrichment = checked('rusprofile_cross_enrich');
-    tg.sendData(JSON.stringify(data));
+    _submitAndClose(data);
 }
 
 function submitYandexForm(e) {
@@ -603,7 +612,7 @@ function submitYandexForm(e) {
     if (aiProfile) payload.ai_profile_id = parseInt(aiProfile, 10);
     payload.enable_cross_enrichment = checked('yandex_cross_enrich');
 
-    tg.sendData(JSON.stringify(payload));
+    _submitAndClose(payload);
 }
 
 // =====================================================================
