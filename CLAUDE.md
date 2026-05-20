@@ -8,10 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Обзор проекта
 
-Парсер для квалификации компаний-клиентов на базе Rusprofile.ru с ИИ-анализом сайтов. Три этапа:
-1. Парсинг Rusprofile + выгрузка в Google Sheets + Telegram Mini App бот
-2. ИИ-квалификация компаний по анализу сайтов (GPT-4o-mini)
-3. Масштабирование — дополнительные источники данных
+Парсер для квалификации компаний-клиентов на базе Rusprofile.ru с ИИ-анализом сайтов. Этапы:
+1. **Парсинг Rusprofile + Я.Карты + выгрузка в Google Sheets + Telegram Mini App бот.** ✅ В проде.
+2. **ИИ-квалификация компаний по анализу сайтов (GPT-4o-mini), 5-этапный конвейер, кросс-обогащение источников.** ✅ В проде с 2026-05-15. См. [docs/tz_ai_qualification_v3.md](docs/tz_ai_qualification_v3.md), [docs/qualify_pipeline.md](docs/qualify_pipeline.md).
+3. **Личный кабинет, тарифы (Trial / Basic / Pro), биллинг через ЮKassa.** 🚧 В работе с 2026-05-20. См. [docs/tz_billing_tariffs.md](docs/tz_billing_tariffs.md), [docs/roadmap_billing_tariffs.md](docs/roadmap_billing_tariffs.md).
+4. Масштабирование — дополнительные источники данных.
 
 ## Стек технологий
 
