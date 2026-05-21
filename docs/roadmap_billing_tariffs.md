@@ -65,17 +65,24 @@
 
 ## Блок 3. subscription_service
 
-- [ ] **3.1** `src/services/subscription_service.py`:
-  - `get_active_subscription(session, tenant)`
-  - `create_subscription_from_payment(session, tenant, tariff, payment, method_id)`
-  - `cancel_subscription(session, sub)` — auto_renew=False, сохраняем
-    доступ до `expires_at`
-  - `mark_past_due(session, sub)`
-  - `renew_subscription(session, sub)` — попытка `charge_recurrent`
-- [ ] **3.2** Lifecycle-тесты подписок (`test_subscription_service.py`):
-  оплата → активация → продление → отмена → expired → reactivation.
-- [ ] **3.3** `pytest` зелёное → commit `feat(billing): subscription_service
-  с lifecycle и автопродлением` → push.
+- [x] **3.1** `src/services/subscription_service.py`:
+  - `get_active_subscription` (игнорит expired/past_due)
+  - `list_tenant_subscriptions` (история для UI)
+  - `activate_subscription_manually(tariff, months, notes,
+    yookassa_payment_method_id)` — единая точка активации, та же
+    будет вызвана из payment-webhook после подключения эквайринга
+  - `cancel_subscription` — auto_renew=False, доступ до expires_at
+  - `mark_past_due` — для scheduler после неудачного списания
+  - `block_after_grace` — grace истёк → EXPIRED + блок tenant
+  - `expire_subscription` — естественное истечение → TRIAL_EXPIRED + блок
+  - `find_expiring_soon` / `find_past_due_overdue` — для scheduler
+  - `renew_subscription_stub` — заглушка автопродления (всегда False
+    до подключения ЮKassa)
+- [x] **3.2** Lifecycle-тесты `test_subscription_service.py` (20 шт.):
+  активация / продление / смена тарифа / отмена / past_due / grace /
+  expire / find_*.
+- [x] **3.3** `pytest tests/` → 315 passed → commit `feat(billing):
+  subscription_service с lifecycle и ручной активацией` → push.
 
 ## Блок 4. Scheduler + notifications
 
