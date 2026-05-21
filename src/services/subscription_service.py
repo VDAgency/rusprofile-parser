@@ -52,6 +52,8 @@ def _settings():
         "renewal_reminder_days": int(getattr(config, "RENEWAL_REMINDER_DAYS", 3)),
         "basic_price": config.BASIC_PRICE_RUB,
         "pro_price": config.PRO_PRICE_RUB,
+        "pro_quota_companies": int(getattr(config, "DEFAULT_AI_QUOTA_COMPANIES", 1000)),
+        "pro_quota_tokens": int(getattr(config, "DEFAULT_AI_QUOTA_TOKENS", 10_000_000)),
     }
 
 
@@ -207,6 +209,7 @@ def activate_subscription_manually(
         tenant.tariff_plan = tariff
         _unblock_tenant(tenant)
         _reset_period_counters(tenant)
+        _apply_tariff_quotas(tenant, tariff)
         session.flush()
         logger.info(
             "Subscription extended for tenant_id=%s: tariff=%s, +%d days, "
@@ -249,11 +252,14 @@ def activate_subscription_manually(
     tenant.active_subscription_id = sub.id
     _unblock_tenant(tenant)
     _reset_period_counters(tenant)
+    _apply_tariff_quotas(tenant, tariff)
     session.flush()
 
     logger.info(
-        "Subscription created for tenant_id=%s: tariff=%s, expires=%s",
+        "Subscription created for tenant_id=%s: tariff=%s, expires=%s, "
+        "ai_quota=%s/%s",
         tenant.id, tariff, new_expires.isoformat(),
+        tenant.ai_quota_companies_monthly, tenant.ai_quota_tokens_monthly,
     )
     return ActivationResult(
         subscription=sub,
@@ -395,3 +401,19 @@ def _reset_period_counters(tenant: Tenant) -> None:
     tenant.ai_companies_processed_period = 0
     tenant.ai_tokens_used_period = 0
     tenant.quota_period_start = _now()
+
+
+def _apply_tariff_quotas(tenant: Tenant, tariff: str) -> None:
+    """Выставляет квоты ИИ согласно тарифу.
+
+    - Pro: дефолтные DEFAULT_AI_QUOTA_COMPANIES/TOKENS из config.
+    - Basic: квоты = 0 (ИИ не доступен).
+    - SIMPLE/AI (legacy) — не трогаем, у них квоты остаются как были.
+    """
+    s = _settings()
+    if tariff == TariffPlan.PRO.value:
+        tenant.ai_quota_companies_monthly = s["pro_quota_companies"]
+        tenant.ai_quota_tokens_monthly = s["pro_quota_tokens"]
+    elif tariff == TariffPlan.BASIC.value:
+        tenant.ai_quota_companies_monthly = 0
+        tenant.ai_quota_tokens_monthly = 0

@@ -42,7 +42,8 @@ def test_activate_creates_new_subscription(db_session, trial_tenant, monkeypatch
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     result = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="pro", months=1,
@@ -78,7 +79,8 @@ def test_activate_clears_blocked_flags(db_session, trial_tenant, monkeypatch):
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     trial_tenant.is_blocked = True
     trial_tenant.blocked_reason = BlockedReason.TRIAL_EXPIRED_DAYS.value
@@ -91,11 +93,46 @@ def test_activate_clears_blocked_flags(db_session, trial_tenant, monkeypatch):
     assert trial_tenant.blocked_reason is None
 
 
+def test_activate_pro_sets_ai_quotas(db_session, trial_tenant, monkeypatch):
+    """Pro-активация должна выставить квоту ИИ из config."""
+    monkeypatch.setattr(
+        "src.services.subscription_service._settings",
+        lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1500, "pro_quota_tokens": 15_000_000},
+    )
+    sub_svc.activate_subscription_manually(
+        db_session, trial_tenant, tariff="pro",
+    )
+    assert trial_tenant.ai_quota_companies_monthly == 1500
+    assert trial_tenant.ai_quota_tokens_monthly == 15_000_000
+
+
+def test_activate_basic_zeros_ai_quotas(db_session, trial_tenant, monkeypatch):
+    """Basic-активация обнуляет квоты ИИ — ИИ не входит в тариф."""
+    monkeypatch.setattr(
+        "src.services.subscription_service._settings",
+        lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
+    )
+    trial_tenant.ai_quota_companies_monthly = 500   # вдруг был остаток
+    trial_tenant.ai_quota_tokens_monthly = 5_000_000
+    db_session.flush()
+
+    sub_svc.activate_subscription_manually(
+        db_session, trial_tenant, tariff="basic",
+    )
+    assert trial_tenant.ai_quota_companies_monthly == 0
+    assert trial_tenant.ai_quota_tokens_monthly == 0
+
+
 def test_activate_resets_period_counters(db_session, trial_tenant, monkeypatch):
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     trial_tenant.parses_used_period = 50
     trial_tenant.ai_companies_processed_period = 100
@@ -118,7 +155,8 @@ def test_activate_extends_same_tariff(db_session, trial_tenant, monkeypatch):
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     first = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="pro", months=1,
@@ -145,7 +183,8 @@ def test_activate_different_tariff_cancels_old(db_session, trial_tenant, monkeyp
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     first = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="basic",
@@ -174,7 +213,8 @@ def test_get_active_returns_subscription(db_session, trial_tenant, monkeypatch):
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     result = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="basic",
@@ -221,7 +261,8 @@ def test_cancel_keeps_access_until_expires(db_session, trial_tenant, monkeypatch
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     result = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="pro",
@@ -258,7 +299,8 @@ def test_mark_past_due_changes_status(db_session, trial_tenant, monkeypatch):
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     result = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="basic",
@@ -273,7 +315,8 @@ def test_block_after_grace_blocks_tenant(db_session, trial_tenant, monkeypatch):
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     result = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="basic",
@@ -288,7 +331,8 @@ def test_expire_subscription_blocks_tenant(db_session, trial_tenant, monkeypatch
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     result = sub_svc.activate_subscription_manually(
         db_session, trial_tenant, tariff="basic",
@@ -393,7 +437,8 @@ def test_list_tenant_subscriptions_orders_by_created_desc(
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     # Создаём две подписки (вторая поверх первой → первая отменится)
     sub_svc.activate_subscription_manually(db_session, trial_tenant, tariff="basic")

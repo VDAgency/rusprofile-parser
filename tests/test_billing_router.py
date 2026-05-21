@@ -153,7 +153,8 @@ async def test_cancel_subscription_sets_auto_renew_false(
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     from src.services import subscription_service
     result = subscription_service.activate_subscription_manually(
@@ -204,7 +205,8 @@ async def test_subscription_detail_after_activation(
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     from src.services import subscription_service
     subscription_service.activate_subscription_manually(

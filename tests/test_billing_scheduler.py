@@ -205,7 +205,8 @@ async def test_process_past_due_blocks_overdue(db_session, fresh_trial, monkeypa
     monkeypatch.setattr(
         "src.services.subscription_service._settings",
         lambda: {"period_days": 30, "grace_days": 5, "renewal_reminder_days": 3,
-                 "basic_price": 990, "pro_price": 2990},
+                 "basic_price": 990, "pro_price": 2990,
+                 "pro_quota_companies": 1000, "pro_quota_tokens": 10_000_000},
     )
     now = datetime.now(timezone.utc)
     sub = Subscription(
