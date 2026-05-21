@@ -111,33 +111,45 @@
 
 ## Блок 5. API + интеграция в parse
 
-- [ ] **5.1** `src/api/billing_router.py`:
-  - `GET /api/billing/plans` — список тарифов и цен
-  - `POST /api/billing/create-payment` — создание платежа, возврат
-    `confirmation_url`
-  - `GET /api/billing/payment-status/{id}` — для client-polling
-  - `POST /api/billing/yookassa-webhook` — публичный (без auth),
-    валидируется по signature/IP
-  - `POST /api/billing/cancel-subscription`
-  - `GET /api/billing/payments` — история
-  - `GET /api/billing/subscription` — детали активной
-- [ ] **5.2** Расширить `src/api/tariff_router.py::get_tariff`:
-  поля `trial_expires_at`, `trial_parses_left`, `is_blocked`,
-  `subscription` (active sub из БД), `parses_used_period`.
-- [ ] **5.3** `src/bot/handlers.py`: перед запуском парсинга вызывать
-  `tariff_helpers.is_parsing_available(tenant)` → если False, отвечать
-  понятным сообщением и не стартовать.
-- [ ] **5.4** `src/services/parse_service.py`: декремент
-  `trial_parses_left` (Trial) / инкремент `parses_used_period` (Basic/Pro)
-  сразу после `_clamp_max_new`. Компенсация (+1 обратно) при
-  `error_message and total_new == 0`.
-- [ ] **5.5** Тесты `test_parse_billing_integration.py`: trial-блок,
-  компенсация при ошибке, idempotence декремента.
-- [ ] **5.6** Nginx: настроить webhook-URL `/api/billing/yookassa-webhook`
-  (он публичный, без auth) — допустить proxy_pass без auth-middleware.
-  TODO в коде: проверить что middleware пропускает webhook.
-- [ ] **5.7** `pytest` зелёное → commit `feat(billing): API эндпоинты,
-  блокировка парсинга, интеграция в parse_service + webhook` → push.
+- [x] **5.1** Расширен `src/api/tariff_router.py::get_tariff`:
+  поля `trial` (days_left/parses_left/expires_at), `is_blocked`,
+  `blocked_reason`, `parsing_blocked_message`, `is_ai_available`,
+  `is_parsing_available`, `subscription` (active sub из БД),
+  `parses_used_period`. Tenant'а ещё нет в БД → нейтральный
+  «новичок-trial» (без ошибок).
+- [x] **5.2** `src/api/billing_router.py`:
+  - `GET /api/billing/plans` — список тарифов и цен + `billing_configured`
+  - `POST /api/billing/create-payment` — **stub-режим**: отдаёт URL
+    payment_stub.html
+  - `GET /api/billing/payment-status/{id}` — всегда 404 в stub
+  - `POST /api/billing/cancel-subscription` — реальная отмена
+    (`auto_renew=False`), работает с активацией от CLI
+  - `GET /api/billing/payments` — реальная история (пустая в stub)
+  - `GET /api/billing/subscription` — реальная подписка + история
+  - `POST /api/billing/yookassa-webhook` — **отложено** (вернёмся
+    с реальной интеграцией)
+- [x] **5.3** `src/bot/handlers.py::handle_webapp_data`: перед запуском
+  парсинга вызывает `is_parsing_available(tenant)` → если False,
+  отвечает понятным сообщением (`availability.message`) и не стартует.
+  Tenant создаётся через `ensure_tenant` (Trial для новых).
+- [x] **5.4** `src/services/parse_service.py`:
+  - Helper `_decrement_parses_counter(tenant)`: -1 от
+    `trial_parses_left` (для Trial, не уходит в минус),
+    +1 к `parses_used_period` (для всех).
+  - Helper `_compensate_parses_counter(tenant_id)`: возвращает парсинг
+    при ошибке через свою сессию.
+  - Вызов decrement в `run_rusprofile` и `run_yandex` сразу после
+    `session.flush()` создания ParseRun.
+  - Вызов compensate в обоих early-error branches (`error_message and
+    not persisted`).
+- [x] **5.5** Тесты:
+  - `test_parse_billing_integration.py` (9 шт.): decrement для Trial/
+    Basic/Pro/SIMPLE, защита от минуса, компенсация, безопасность
+    при unknown tenant_id.
+  - `test_billing_router.py` (12 шт.): plans, create-payment в stub,
+    отказ для не-payable, cancel-subscription с активной/без, история.
+- [x] **5.6** Все 357 тестов зелёные → commit `feat(billing): API
+  эндпоинты + блокировка парсинга + декремент Trial + компенсация` → push.
 
 ## Блок 6. Mini App — кабинет и оплата
 

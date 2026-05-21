@@ -190,6 +190,23 @@ async def handle_webapp_data(message: Message):
             )
             return
 
+        # Этап 3 — проверка тарифа перед стартом парсинга. Если tenant
+        # на TRIAL_EXPIRED, истёк срок дней / парсингов trial, или
+        # is_blocked — отказываем с понятным сообщением.
+        from src.db import ensure_tenant, get_session
+        from src.services.tariff_helpers import is_parsing_available
+        with get_session() as session:
+            tenant = ensure_tenant(
+                session, user_id, username=message.from_user.username,
+            )
+            availability = is_parsing_available(tenant)
+        if not availability.ok:
+            await message.answer(
+                availability.message
+                or "Парсинг недоступен. Откройте Кабинет в Mini App."
+            )
+            return
+
         source = data.get("source", "rusprofile")
         max_new = _clamp_max_new(_parse_int(data.get("max_new")))
 

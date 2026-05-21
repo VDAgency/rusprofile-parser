@@ -432,6 +432,9 @@ def build_app(bot: Bot | None = None) -> web.Application:
     from src.api.tariff_router import register_tariff_routes
     register_profiles_routes(app)
     register_tariff_routes(app)
+    # Этап 3 — биллинг (stub до подключения эквайринга).
+    from src.api.billing_router import register_billing_routes
+    register_billing_routes(app)
     return app
 
 

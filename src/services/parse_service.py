@@ -136,6 +136,48 @@ def _make_predicate(known):
 
 
 # ---------------------------------------------------------------------------
+# Этап 3 — учёт парсингов (Trial-декремент + period-инкремент)
+# ---------------------------------------------------------------------------
+
+
+def _decrement_parses_counter(tenant) -> None:
+    """Списывает один парсинг с tenant'а.
+
+    - Для Trial: -1 от ``trial_parses_left`` (не уходит в минус).
+    - Для всех остальных тарифов: +1 к ``parses_used_period`` (счётчик
+      периода, используется для soft-лимита Basic/Pro и для отображения
+      в Кабинете).
+
+    Вызывается СРАЗУ при создании ParseRun (в той же сессии, чтобы
+    commit прошёл атомарно с записью run'а).
+    """
+    from src.db.models import TariffPlan
+    if tenant.tariff_plan == TariffPlan.TRIAL.value:
+        if tenant.trial_parses_left and tenant.trial_parses_left > 0:
+            tenant.trial_parses_left -= 1
+    tenant.parses_used_period = (tenant.parses_used_period or 0) + 1
+
+
+def _compensate_parses_counter(tenant_id: int) -> None:
+    """Возвращает один парсинг обратно — для случаев когда run завершился
+    с ошибкой ДО фактического парсинга (например, упал на этапе
+    аутентификации).
+
+    Открывает свою сессию (используется из except-блоков, где исходная
+    сессия уже закрыта).
+    """
+    from src.db.models import TariffPlan
+    with get_session() as session:
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            return
+        if tenant.tariff_plan == TariffPlan.TRIAL.value:
+            tenant.trial_parses_left = (tenant.trial_parses_left or 0) + 1
+        if tenant.parses_used_period and tenant.parses_used_period > 0:
+            tenant.parses_used_period -= 1
+
+
+# ---------------------------------------------------------------------------
 # Запуск Rusprofile-парсинга
 # ---------------------------------------------------------------------------
 
@@ -175,6 +217,8 @@ async def run_rusprofile(
         session.flush()
         run_id = run.id
         tenant_id = tenant.id
+        # Этап 3 — учёт парсингов в Trial / period-счётчике.
+        _decrement_parses_counter(tenant)
         # `tenant` объект ещё нужен после выхода из сессии — но связь
         # нам не нужна, есть id; ниже создадим новую сессию.
 
@@ -242,6 +286,10 @@ async def run_rusprofile(
             run.status = RunStatus.ERROR.value
             run.error_message = error_message[:1000]
             run.finished_at = datetime.now(timezone.utc)
+            # Этап 3 — компенсация trial-парсинга: клиент не должен
+            # терять попытку из-за наших багов.
+            session.commit()
+            _compensate_parses_counter(tenant_id)
             return ParseResult(
                 run_id=run_id, total_new=0, total_skipped=skipped,
                 sheet_url=None, status=run.status, error_message=run.error_message,
@@ -424,6 +472,8 @@ async def run_yandex(
         session.flush()
         run_id = run.id
         tenant_id = tenant.id
+        # Этап 3 — учёт парсингов.
+        _decrement_parses_counter(tenant)
 
     if progress_callback:
         await progress_callback(
@@ -625,6 +675,9 @@ async def run_yandex(
             run.status = RunStatus.ERROR.value
             run.error_message = error_message[:1000]
             run.finished_at = datetime.now(timezone.utc)
+            # Этап 3 — компенсация trial-парсинга на наших ошибках.
+            session.commit()
+            _compensate_parses_counter(tenant_id)
             return ParseResult(
                 run_id=run_id, total_new=0, total_skipped=skipped,
                 sheet_url=None, status=run.status,
