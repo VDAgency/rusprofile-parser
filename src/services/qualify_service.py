@@ -259,10 +259,12 @@ async def _qualify_one(
         log.write(rec)
         return
 
-    # Simple-тариф: не идём в ИИ-стадии. Status остаётся None — это нормально:
-    # компания не «горячая/холодная», она просто скорошена. Sheets отсортирует
-    # по ai_score.
-    if tenant.tariff_plan != TariffPlan.AI.value or profile is None:
+    # Simple-тариф (или Trial/Basic) — не идём в ИИ-стадии. Status
+    # остаётся None — это нормально: компания не «горячая/холодная»,
+    # она просто скорошена. Sheets отсортирует по ai_score.
+    # ИИ доступен только для PRO и legacy AI.
+    _ai_tariffs = {TariffPlan.AI.value, TariffPlan.PRO.value}
+    if tenant.tariff_plan not in _ai_tariffs or profile is None:
         company.ai_qualified_at = datetime.now(timezone.utc)
         _bump(stats.decisions_by_stage, "simple_done")
         rec["final"] = {
@@ -523,8 +525,8 @@ async def qualify_run(
             log.close()
             return stats
 
-        # Сбрасываем период квоты, если истёк.
-        if tenant.tariff_plan == TariffPlan.AI.value:
+        # Сбрасываем период квоты, если истёк (для платных ИИ-тарифов).
+        if tenant.tariff_plan in (TariffPlan.AI.value, TariffPlan.PRO.value):
             quota_service.reset_if_period_expired(session, tenant)
 
         profile = None
@@ -579,8 +581,11 @@ async def qualify_run(
 
         await _runner()
 
-        # Учёт квоты и стоимости.
-        if tenant.tariff_plan == TariffPlan.AI.value and stats.tokens_used_total:
+        # Учёт квоты и стоимости (для платных ИИ-тарифов).
+        if (
+            tenant.tariff_plan in (TariffPlan.AI.value, TariffPlan.PRO.value)
+            and stats.tokens_used_total
+        ):
             quota_service.increment_companies(session, tenant, stats.llm_calls)
             quota_service.increment_tokens(session, tenant, stats.tokens_used_total)
 

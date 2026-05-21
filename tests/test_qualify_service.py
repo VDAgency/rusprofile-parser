@@ -290,3 +290,33 @@ async def test_qualify_run_handles_invalid_run_id():
         enable_cross_enrichment=False,
     )
     assert stats.total == 0
+
+
+@pytest.mark.anyio
+async def test_qualify_run_pro_tariff_runs_ai_stages(
+    db_session, setup_run, saved_profile,
+):
+    """Регресс-фикс: tariff='pro' (Этап 3) должен идти в ИИ-стадии
+    наравне с legacy 'ai'. Раньше проверялось только AI и Pro
+    скипался в simple_done."""
+    setup_run["tenant"].tariff_plan = TariffPlan.PRO.value
+    db_session.commit()
+
+    fake_site = WebsiteExtractResult(
+        text=("Мы оптовый поставщик товаров для b2b. Огромный склад, "
+              "дилерская сеть, партнёрская программа." * 10),
+        pages_fetched=["https://x.ru"],
+    )
+    with patch(
+        "src.ai.website_extractor.extract_website_text",
+        new=AsyncMock(return_value=fake_site),
+    ):
+        stats = await qualify_service.qualify_run(
+            run_id=setup_run["run"].id,
+            tenant_id=setup_run["tenant"].id,
+            profile_id=saved_profile.id,
+            enable_cross_enrichment=False,
+        )
+    # Pro-tenant + хорошо-матчающие компании = должны быть hot (не simple_done).
+    assert stats.by_status.get("hot", 0) == 3
+    assert "simple_done" not in stats.decisions_by_stage
