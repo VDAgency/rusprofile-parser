@@ -636,9 +636,20 @@ function setupBottomNav() {
                 loadHistory();
             } else if (target === 'profiles') {
                 loadProfilesList();
+            } else if (target === 'cabinet') {
+                loadCabinet();
             }
         });
     });
+}
+
+function switchToPage(targetPage) {
+    /** Программное переключение страницы (для кнопок «Открыть кабинет»
+     *  внутри баннеров). */
+    const btn = document.querySelector(
+        `.bottom-nav .nav-btn[data-page="${targetPage}"]`
+    );
+    if (btn) btn.click();
 }
 
 // =====================================================================
@@ -1218,12 +1229,296 @@ async function saveProfile() {
     }
 }
 
+// =====================================================================
+// Этап 3 — Кабинет / биллинг (stub)
+// =====================================================================
+
+let cachedTariff = null;  // последний ответ от GET /api/tariff
+let cachedPlans = null;   // последний ответ от GET /api/billing/plans
+
+async function loadCabinet() {
+    /** Подгружает /api/tariff + /api/billing/plans + /api/billing/subscription,
+     *  рисует страницу Кабинета. */
+    const status = document.getElementById('cabinet-status');
+    const tariffEl = document.getElementById('cabinet-tariff');
+    const plansEl = document.getElementById('cabinet-plans');
+    const histEl = document.getElementById('cabinet-history');
+    status.textContent = 'Загрузка…';
+    tariffEl.classList.add('hidden');
+    plansEl.classList.add('hidden');
+    histEl.classList.add('hidden');
+
+    try {
+        const [tariffResp, plansResp, subResp] = await Promise.all([
+            fetch(apiUrl('/api/tariff'), apiFetchOptions()),
+            fetch(apiUrl('/api/billing/plans'), apiFetchOptions()),
+            fetch(apiUrl('/api/billing/subscription'), apiFetchOptions()),
+        ]);
+        if (!tariffResp.ok) throw new Error('tariff ' + tariffResp.status);
+        cachedTariff = await tariffResp.json();
+        cachedPlans = plansResp.ok ? await plansResp.json() : { plans: [] };
+        const sub = subResp.ok ? await subResp.json() : { active: null, history: [] };
+
+        renderCabinetTariff(cachedTariff, sub);
+        renderCabinetPlans(cachedPlans, cachedTariff);
+        renderCabinetHistory(sub);
+
+        status.textContent = '';
+        tariffEl.classList.remove('hidden');
+        plansEl.classList.remove('hidden');
+        histEl.classList.remove('hidden');
+
+        // Обновляем баннер блокировки на странице «Парсинг».
+        updateParseBlockedBanner(cachedTariff);
+    } catch (err) {
+        console.error('loadCabinet failed:', err);
+        status.textContent = 'Не удалось загрузить данные кабинета. Попробуйте позже.';
+    }
+}
+
+function renderCabinetTariff(t, sub) {
+    const el = document.getElementById('cabinet-tariff');
+    const titleMap = {
+        trial: 'Trial (бесплатно)',
+        trial_expired: 'Trial закончился',
+        basic: 'Basic',
+        pro: 'Pro',
+        simple: 'Basic (бессрочно)',  // legacy
+        ai: 'Pro (бессрочно)',        // legacy
+    };
+    const title = titleMap[t.tariff_plan] || t.tariff_plan;
+
+    let body = `<div class="cabinet-tariff-title">${escapeHtml(title)}</div>`;
+
+    // Состояние Trial
+    if (t.trial && t.trial.is_trial) {
+        const daysLeft = t.trial.days_left ?? '—';
+        const parsesLeft = t.trial.parses_left ?? '—';
+        body += `
+            <div class="cabinet-meter">
+                ⏰ Осталось <b>${daysLeft} дн.</b> / <b>${parsesLeft} парсингов</b>
+            </div>
+            <div class="cabinet-hint">
+                После окончания доступа парсинг будет приостановлен. История и
+                выгрузки в Sheets/Excel останутся доступны.
+            </div>
+        `;
+    }
+    // Активная подписка
+    else if (sub && sub.active) {
+        const expires = sub.active.expires_at
+            ? new Date(sub.active.expires_at).toLocaleDateString('ru-RU')
+            : '—';
+        const renewLine = sub.active.auto_renew
+            ? `✓ Автопродление включено`
+            : `⊗ Автопродление отключено`;
+        body += `
+            <div class="cabinet-meter">
+                Действует до: <b>${expires}</b>
+            </div>
+            <div class="cabinet-hint">${renewLine}</div>
+        `;
+        if (sub.active.auto_renew) {
+            body += `
+                <button type="button" class="btn-secondary"
+                        onclick="cancelSubscriptionFlow()">
+                    Отменить автопродление
+                </button>
+            `;
+        }
+    }
+    // Trial expired или blocked
+    else if (t.is_blocked || t.tariff_plan === 'trial_expired') {
+        body += `
+            <div class="cabinet-meter blocked">
+                ❌ ${escapeHtml(t.parsing_blocked_message || 'Доступ приостановлен')}
+            </div>
+        `;
+    }
+    // Legacy (simple/ai)
+    else if (t.tariff_plan === 'simple' || t.tariff_plan === 'ai') {
+        body += `
+            <div class="cabinet-hint">
+                Бессрочный доступ — спасибо за раннюю поддержку проекта!
+            </div>
+        `;
+    }
+
+    // Использование за период
+    if (t.usage_current) {
+        const parses = t.usage_current.parses_used_period || 0;
+        let usageHtml = `<div class="cabinet-usage-row">📊 Парсингов за период: <b>${parses}</b></div>`;
+        if (t.is_ai_available && (t.quotas?.companies_monthly || 0) > 0) {
+            const used = t.usage_current.companies_processed || 0;
+            const quota = t.quotas.companies_monthly;
+            const pct = t.usage_current.companies_percent || 0;
+            usageHtml += `
+                <div class="cabinet-usage-row">
+                    🤖 ИИ-проверок: <b>${used}</b> / ${quota} (${pct}%)
+                </div>
+                <div class="cabinet-bar">
+                    <div class="cabinet-bar-fill" style="width:${pct}%"></div>
+                </div>
+            `;
+        }
+        body += `<div class="cabinet-usage">${usageHtml}</div>`;
+    }
+
+    el.innerHTML = body;
+}
+
+function renderCabinetPlans(plansData, currentTariff) {
+    const list = document.getElementById('cabinet-plans-list');
+    if (!plansData || !plansData.plans || plansData.plans.length === 0) {
+        list.innerHTML = '<div class="cabinet-hint">Тарифы не настроены.</div>';
+        return;
+    }
+    const billingConfigured = plansData.billing_configured;
+    list.innerHTML = plansData.plans.map((p) => {
+        const isCurrent =
+            currentTariff &&
+            (currentTariff.tariff_plan === p.id ||
+                (p.id === 'basic' && currentTariff.tariff_plan === 'simple') ||
+                (p.id === 'pro' && currentTariff.tariff_plan === 'ai'));
+        const priceLine = p.price_rub > 0
+            ? `${p.price_rub} ₽ / ${p.period_days} дн.`
+            : `Цена будет настроена`;
+        const btnLabel = !billingConfigured
+            ? 'Оплатить (в разработке)'
+            : 'Оплатить';
+        const btnClass = isCurrent
+            ? 'btn-secondary'
+            : 'btn-primary';
+        return `
+            <div class="cabinet-plan ${isCurrent ? 'current' : ''}">
+                <div class="cabinet-plan-head">
+                    <span class="cabinet-plan-name">${escapeHtml(p.name)}</span>
+                    <span class="cabinet-plan-price">${escapeHtml(priceLine)}</span>
+                </div>
+                <div class="cabinet-plan-descr">${escapeHtml(p.description)}</div>
+                ${isCurrent
+                    ? '<div class="cabinet-plan-current">Ваш текущий тариф</div>'
+                    : `<button type="button" class="${btnClass}" onclick="payTariff('${p.id}')">${btnLabel}</button>`
+                }
+            </div>
+        `;
+    }).join('');
+}
+
+function renderCabinetHistory(sub) {
+    const list = document.getElementById('cabinet-history-list');
+    if (!sub || !sub.history || sub.history.length === 0) {
+        list.innerHTML = '<div class="cabinet-hint">История подписок пуста.</div>';
+        return;
+    }
+    list.innerHTML = sub.history.map((s) => {
+        const created = s.starts_at
+            ? new Date(s.starts_at).toLocaleDateString('ru-RU')
+            : '—';
+        const expires = s.expires_at
+            ? new Date(s.expires_at).toLocaleDateString('ru-RU')
+            : '—';
+        const statusMap = {
+            active: '✓ Активна',
+            past_due: '⚠ Не оплачена',
+            cancelled: '⊗ Отменена',
+            expired: '⏱ Истекла',
+        };
+        return `
+            <div class="cabinet-history-row">
+                <span class="cabinet-history-tariff">${escapeHtml(s.tariff_plan.toUpperCase())}</span>
+                <span class="cabinet-history-period">${created} → ${expires}</span>
+                <span class="cabinet-history-status">${statusMap[s.status] || s.status}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateParseBlockedBanner(t) {
+    /** Обновляет баннер на странице «Парсинг» в соответствии с
+     *  is_parsing_available. */
+    const banner = document.getElementById('parseBlockedBanner');
+    if (!banner) return;
+    if (!t || t.is_parsing_available !== false) {
+        banner.classList.add('hidden');
+        return;
+    }
+    const text = document.getElementById('parseBlockedText');
+    if (text) text.textContent = t.parsing_blocked_message
+        || 'Тариф не позволяет запустить парсинг.';
+    banner.classList.remove('hidden');
+}
+
+window.payTariff = async function(tariff) {
+    /** Создаёт «платёж» (stub) и открывает confirmation_url. */
+    try {
+        const resp = await fetch(apiUrl('/api/billing/create-payment'), {
+            ...apiFetchOptions(),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tariff }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            tg.showAlert(data.error || data.message || 'Не удалось создать платёж.');
+            return;
+        }
+        const url = data.confirmation_url;
+        if (!url) {
+            tg.showAlert('Платёжный URL не получен.');
+            return;
+        }
+        // Stub-страница лежит в /app/payment_stub.html
+        // tg.openLink открывает во внешнем браузере, что для Telegram Web
+        // ведёт к открытию в новой вкладке. Для stub-страницы достаточно.
+        if (typeof tg.openLink === 'function') {
+            tg.openLink(url);
+        } else {
+            window.open(url, '_blank');
+        }
+    } catch (err) {
+        console.error('payTariff failed:', err);
+        tg.showAlert('Сеть недоступна.');
+    }
+};
+
+window.cancelSubscriptionFlow = async function() {
+    if (!confirm('Отменить автопродление? Доступ сохранится до даты окончания.')) {
+        return;
+    }
+    try {
+        const resp = await fetch(
+            apiUrl('/api/billing/cancel-subscription'),
+            { ...apiFetchOptions(), method: 'POST' }
+        );
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            tg.showAlert(data.error || 'Не удалось отменить.');
+            return;
+        }
+        tg.showAlert('Автопродление отключено. Доступ сохраняется до ' +
+            new Date(data.access_until).toLocaleDateString('ru-RU') + '.');
+        await loadCabinet();
+    } catch (err) {
+        tg.showAlert('Сеть недоступна.');
+    }
+};
+
+// Кнопка «Открыть кабинет» в баннере блокировки.
+function setupParseBlockedBanner() {
+    const btn = document.getElementById('parseBlockedGoToCabinet');
+    if (btn) {
+        btn.addEventListener('click', () => switchToPage('cabinet'));
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     populateRegions();
     populateYandexRegions();
     setupTabs();
     setupBottomNav();
     setupProfileForms();
+    setupParseBlockedBanner();
 
     document.getElementById('searchForm').addEventListener('submit', submitForm);
     const yandexForm = document.getElementById('yandexForm');
@@ -1251,4 +1546,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Этап 2 v3 — загружаем тариф и профили.
     await loadTariff();
+
+    // Этап 3 — баннер блокировки парсинга. cachedTariff заполнится
+    // в loadCabinet, но для случая когда пользователь не открыл
+    // Кабинет, сделаем отдельный лёгкий запрос здесь же.
+    try {
+        const r = await fetch(apiUrl('/api/tariff'), apiFetchOptions());
+        if (r.ok) {
+            const t = await r.json();
+            updateParseBlockedBanner(t);
+        }
+    } catch (_) { /* ignore */ }
 });

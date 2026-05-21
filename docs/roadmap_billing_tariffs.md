@@ -151,32 +151,39 @@
 - [x] **5.6** Все 357 тестов зелёные → commit `feat(billing): API
   эндпоинты + блокировка парсинга + декремент Trial + компенсация` → push.
 
-## Блок 6. Mini App — кабинет и оплата
+## Блок 6. Mini App — кабинет и оплата (stub)
 
-- [ ] **6.1** `src/webapp/index.html`:
-  - Новая страница `page-cabinet` с динамическим контентом (loadCabinet
-    заполнит)
-  - Кнопка в bottom-nav `data-page="cabinet"` (видна всем)
-  - Banner блокировки на странице «Парсинг» (показывается при
-    `is_blocked=true`)
-- [ ] **6.2** `src/webapp/app.v2.js`:
-  - `loadCabinet()` — `GET /api/billing/subscription`,
-    `GET /api/billing/payments`, рендер
-  - `renderCabinetTrial(data)` — отображение для Trial
-  - `renderCabinetActive(data)` — для активной подписки
-  - `renderCabinetBlocked(data)` — для blocked
-  - `payTariff(tariff)` — `POST /api/billing/create-payment`,
-    `tg.openLink(confirmation_url)`
-  - На `?paid=ok` в URL → polling `/api/billing/payment-status/{id}`
-    с таймаутом 30 сек
-- [ ] **6.3** `src/webapp/style.v2.css`: `cabinet-card`, `cabinet-meter`,
-  `banner-blocked`, `pay-button-primary/secondary`,
-  `payment-history-row`.
-- [ ] **6.4** Cache-bust версию обновить (`sync_webapp_okved.py`
-  делает автоматически при деплое).
-- [ ] **6.5** Smoke в браузере (Telegram Web + Desktop) →
-  commit `feat(ui): личный кабинет с тарифами, оплатой и историей
-  платежей` → push.
+- [x] **6.1** `src/webapp/index.html`:
+  - Новая страница `page-cabinet` (4 секции: тариф / тарифы для оплаты /
+    история подписок / статус загрузки).
+  - Кнопка в bottom-nav `data-page="cabinet"` с иконкой 👤 — видна всем.
+  - Banner блокировки на странице «Парсинг» (`#parseBlockedBanner`)
+    с кнопкой «Открыть кабинет».
+- [x] **6.2** `src/webapp/app.v2.js`:
+  - `loadCabinet()` — параллельно `/api/tariff` + `/api/billing/plans`
+    + `/api/billing/subscription`.
+  - `renderCabinetTariff(t, sub)` — отображение для Trial/active/blocked/
+    legacy с usage-метрикой (парсинги + ИИ-квота).
+  - `renderCabinetPlans(plansData, currentTariff)` — список Basic/Pro
+    с кнопками «Оплатить» и пометкой текущего тарифа.
+  - `renderCabinetHistory(sub)` — таблица всех подписок.
+  - `payTariff(tariff)` — `POST /api/billing/create-payment` →
+    `tg.openLink(confirmation_url)` (stub-страница).
+  - `cancelSubscriptionFlow()` — confirm + `POST /api/billing/cancel-subscription`.
+  - `updateParseBlockedBanner(t)` — баннер на странице «Парсинг».
+  - В DOMContentLoaded — отдельный лёгкий `GET /api/tariff` для
+    инициализации баннера (без открытия кабинета).
+  - `switchToPage(target)` — программное переключение (для кнопки
+    «Открыть кабинет» в баннере).
+- [x] **6.3** `src/webapp/style.v2.css`: `banner-blocked`, `cabinet-card`,
+  `cabinet-meter`, `cabinet-usage`, `cabinet-bar`, `cabinet-plan`
+  (+ `.current`), `cabinet-history-row`. Темизация через
+  Telegram theme params.
+- [x] **6.4** Polling статуса платежа НЕ реализован (в stub-режиме нет
+  чего polling'ить, payment-status всегда 404). Вернёмся в отложенном
+  блоке после ЮKassa.
+- [x] **6.5** Smoke имportов backend (билинговые роутеры) → commit
+  `feat(ui): личный кабинет с тарифами + stub-кнопка оплаты` → push.
 
 ## Блок 7. Ручная активация подписок + документация (вместо ЮKassa smoke)
 

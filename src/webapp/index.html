@@ -18,6 +18,18 @@
         <h1>Поиск компаний</h1>
         <p class="subtitle">Настройте фильтры и запустите парсинг</p>
 
+        <!-- Этап 3: баннер блокировки (Trial expired / past_due / blocked) -->
+        <div id="parseBlockedBanner" class="banner-blocked hidden">
+            <div class="banner-icon">⚠</div>
+            <div class="banner-body">
+                <div class="banner-title">Парсинг недоступен</div>
+                <div class="banner-text" id="parseBlockedText"></div>
+                <button type="button" class="btn-primary" id="parseBlockedGoToCabinet">
+                    Открыть кабинет
+                </button>
+            </div>
+        </div>
+
         <!-- Переключатель источников -->
         <div class="source-tabs">
             <button type="button" class="tab active" data-source="rusprofile">Rusprofile</button>
@@ -411,6 +423,29 @@
         </div>
       </div>
 
+      <!-- Вкладка «Кабинет» (Этап 3) — видна всем тарифам -->
+      <div id="page-cabinet" class="page hidden">
+        <h1>Кабинет</h1>
+        <p class="subtitle">Тариф, оплата, история подписок</p>
+
+        <div id="cabinet-status" class="hint">Загрузка…</div>
+
+        <!-- Контейнер с информацией о тарифе (заполняется JS) -->
+        <div id="cabinet-tariff" class="cabinet-card hidden"></div>
+
+        <!-- Список платных тарифов с кнопками «Оплатить» -->
+        <div id="cabinet-plans" class="cabinet-section hidden">
+            <h2>Тарифы</h2>
+            <div id="cabinet-plans-list"></div>
+        </div>
+
+        <!-- История подписок -->
+        <div id="cabinet-history" class="cabinet-section hidden">
+            <h2>История подписок</h2>
+            <div id="cabinet-history-list"></div>
+        </div>
+      </div>
+
     </div>  <!-- /.container -->
 
     <!-- Нижняя навигация -->
@@ -426,6 +461,10 @@
         <button type="button" class="nav-btn ai-only hidden" data-page="profiles">
             <span class="nav-icon">🤖</span>
             <span class="nav-label">ИИ-профили</span>
+        </button>
+        <button type="button" class="nav-btn" data-page="cabinet">
+            <span class="nav-icon">👤</span>
+            <span class="nav-label">Кабинет</span>
         </button>
     </nav>
 
