@@ -348,16 +348,29 @@ _JS_EXTRACT_DETAIL = r"""
   }
 
   // Сайт — внешняя ссылка в блоке *links* или *actions*, не yandex.*
+  // Email — ссылка mailto: ИЛИ email-подобный текст в блоке контактов.
+  // Я.Карты показывают email только если организация его указала в
+  // своей карточке (есть не у всех — у малого бизнеса часто нет).
   let site = '';
+  let email = '';
   const linkEls = card.querySelectorAll(
-    '[class*="business-urls-view"] a, [class*="links"] a, a[class*="link-overflow"]'
+    '[class*="business-urls-view"] a, [class*="links"] a, [class*="contacts"] a, a[class*="link-overflow"]'
   );
   for (const a of linkEls) {
-    const href = a.getAttribute('href') || '';
-    if (href.startsWith('http') && !/yandex\.(ru|com)/.test(href)) {
-      site = href;
-      break;
+    const href = (a.getAttribute('href') || '').trim();
+    if (!email && href.toLowerCase().startsWith('mailto:')) {
+      email = href.slice('mailto:'.length).split('?')[0].trim();
+      continue;
     }
+    if (!site && href.startsWith('http') && !/yandex\.(ru|com)/.test(href)) {
+      site = href;
+    }
+  }
+  // Fallback: ищем email-подобный текст в карточке (когда нет mailto:).
+  if (!email) {
+    const emailRe = /[\w.+-]+@[\w-]+\.[a-z]{2,10}/i;
+    const m = (card.innerText || '').match(emailRe);
+    if (m) email = m[0];
   }
 
   // Координаты — в URL страницы (?ll=lon,lat) или в data-coordinates
@@ -390,7 +403,7 @@ _JS_EXTRACT_DETAIL = r"""
     operating_status = null;  // не уверены
   }
 
-  return { phone, site, coordinates, hours_filled, coordinates_filled, operating_status };
+  return { phone, email, site, coordinates, hours_filled, coordinates_filled, operating_status };
 }
 """
 
@@ -428,6 +441,8 @@ async def enrich_place_details(
 
                 if details.get("phone") and not place.phone:
                     place.phone = details["phone"]
+                if details.get("email") and not place.email:
+                    place.email = details["email"]
                 if details.get("site") and not place.site:
                     place.site = details["site"]
                 if details.get("coordinates") and not place.coordinates:

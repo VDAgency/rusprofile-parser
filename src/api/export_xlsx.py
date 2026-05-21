@@ -192,6 +192,7 @@ def export_run_to_xlsx(session: Session, run_id: int) -> tuple[bytes, str]:
                 c.region or "",
                 c.address or "",
                 phone_disp,
+                c.email or "",
                 c.site or "",
                 str(raw.get("rating") or ""),
                 str(raw.get("reviews_count") or ""),

@@ -553,6 +553,7 @@ async def run_yandex(
                                 session, tenant_db,
                                 name=p.name, source=Source.YANDEX_MAPS.value,
                                 phone=p.phone or None,
+                                email=p.email or None,
                                 region=p.region or region,
                                 address=p.address or None,
                                 okved=p.categories or None,

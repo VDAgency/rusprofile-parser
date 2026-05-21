@@ -13,6 +13,7 @@ class YandexPlace:
     region: str = ""           # запрошенный регион (как ввёл пользователь)
     address: str = ""
     phone: str = ""
+    email: str = ""
     site: str = ""
     rating: str = ""           # "4.5"
     reviews_count: str = ""    # "128" (только число)
@@ -39,6 +40,7 @@ class YandexPlace:
             self.region,
             self.address,
             phone,
+            self.email,
             self.site,
             self.rating,
             self.reviews_count,
