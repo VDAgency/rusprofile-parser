@@ -21,6 +21,7 @@ from aiogram.types import (
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBAPP_URL, LOG_DIR, LOG_FILE
 from src.bot.handlers import router
 from src.api.server import start_api_server
+from src.services.billing_scheduler import register_billing_jobs
 
 
 def setup_logging():
@@ -92,9 +93,19 @@ async def main():
     # Передаём bot — для отправки .xlsx прямо в чат пользователя.
     api_runner = await start_api_server(bot=bot)
 
+    # APScheduler с billing-job'ами (trial-expiry, subscription renewal,
+    # past_due, reminders). Один scheduler на весь процесс — крутится
+    # параллельно с polling'ом.
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    register_billing_jobs(scheduler, bot=bot)
+    scheduler.start()
+    logger.info("Billing scheduler запущен")
+
     try:
         await dp.start_polling(bot)
     finally:
+        scheduler.shutdown(wait=False)
         await api_runner.cleanup()
         await bot.session.close()
 

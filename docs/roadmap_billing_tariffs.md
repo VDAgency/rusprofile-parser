@@ -86,19 +86,28 @@
 
 ## Блок 4. Scheduler + notifications
 
-- [ ] **4.1** `src/services/notifications.py` + `config/notification_templates.py`:
-  9 типов уведомлений (раздел 11.1 ТЗ), безопасная отправка через
-  try/except (бот заблокирован клиентом — не падаем).
-- [ ] **4.2** `src/services/billing_scheduler.py`: APScheduler-jobs
+- [x] **4.1** `src/services/notifications.py`: 9 типов уведомлений
+  (`NotificationKind`-enum + `NOTIFICATION_TEMPLATES`), безопасная
+  отправка `send_notification(bot, uid, kind, **context)` через
+  try/except (бот заблокирован клиентом — не падаем). Шаблоны включают
+  HTML-форматирование `<b>...</b>`. Шаблоны хранятся прямо в модуле
+  (а не в отдельном файле — для простоты).
+- [x] **4.2** `src/services/billing_scheduler.py`: APScheduler-jobs
   - `check_trial_expirations` (каждые 30 мин)
   - `check_subscription_expirations` (каждый час)
-  - `try_recurrent_renewals` (каждые 4 часа)
+  - `try_recurrent_renewals` (каждые 4 часа, использует
+    `renew_subscription_stub` пока — всегда past_due)
   - `process_past_due` (каждый час)
-  - `send_trial_reminders` (раз в день в 10:00 МСК)
-- [ ] **4.3** Регистрация scheduler-jobs в `src/main.py`.
-- [ ] **4.4** Тесты `test_billing_scheduler.py` через freeze_time/моки.
-- [ ] **4.5** `pytest` зелёное → commit `feat(billing): scheduler-jobs
-  для trial/подписок + унифицированные уведомления в Telegram` → push.
+  - `send_trial_reminders` (раз в день в 07:00 UTC = 10:00 МСК)
+- [x] **4.3** Регистрация в `src/main.py`: `AsyncIOScheduler(timezone="UTC")`,
+  `register_billing_jobs(scheduler, bot)`, `scheduler.start()`. Корректное
+  завершение через `scheduler.shutdown(wait=False)` в `finally`.
+- [x] **4.4** Тесты `test_notifications.py` (10 шт.) +
+  `test_billing_scheduler.py` (11 шт.). Изоляция scheduler-job через
+  in-memory SQLite + commit в фикстурах (job открывает свою сессию
+  через `get_session()`).
+- [x] **4.5** `pytest tests/` → 336 passed → commit `feat(billing):
+  scheduler-jobs для trial/подписок + унифицированные уведомления` → push.
 
 ## Блок 5. API + интеграция в parse
 
