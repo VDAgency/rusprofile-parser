@@ -42,21 +42,26 @@
   Существующие tenant'ы не трогаются. Тесты `test_ensure_tenant_trial.py`.
 - [x] **1.5** `pytest tests/` → 282 passed → commit `feat(billing): фундамент — миграция, модели, tariff_helpers, Trial по умолчанию для новых tenant'ов` → push.
 
-## Блок 2. ЮKassa wrapper + payment_service
+## Блок 2. Заглушка оплаты (без ЮKassa — эквайринг ещё не оформлен)
 
-- [ ] **2.1** `src/services/yookassa_client.py`: `AsyncYooKassaClient`
-  (asyncio.to_thread поверх sync SDK), методы `create_payment`,
-  `get_payment`, `charge_recurrent`, `parse_webhook`.
-- [ ] **2.2** `src/services/payment_service.py`:
-  `create_payment_for_tariff`, `process_webhook_succeeded`,
-  `process_webhook_canceled`, `process_recurrent_charge`.
-  Idempotence через `yookassa_idempotence_key`.
-- [ ] **2.3** Чеки (54-ФЗ): встроить `receipt` в `create_payment`
-  с TODO-полями (email + vat_code, заполнить при наличии данных от
-  клиента).
-- [ ] **2.4** Тесты `test_yookassa_client.py` + `test_payment_service.py`
-  с моками HTTP-вызовов SDK → commit `feat(billing): yookassa wrapper +
-  payment_service с idempotence и webhook-обработкой` → push.
+> **⚠ ИЗМЕНЕНИЕ ПЛАНА (2026-05-20):** клиент пока не оформил эквайринг,
+> поэтому полная интеграция с ЮKassa отложена. Сейчас ставим **stub**:
+> кнопка «Оплатить» открывает страницу-заглушку с текстом «Сервис
+> платежей ещё в разработке». Активация платных тарифов после
+> получения эквайринга — через ручной helper / SQL.
+> Возврат к полному Блоку 2 запланирован отдельным итемом «После
+> эквайринга: yookassa_client + real payment_service».
+
+- [x] **2.1** `src/webapp/payment_stub.html` — статичная страница-заглушка
+  с текстом, ссылкой «Связаться с поддержкой» и кнопкой «Назад в бот».
+  Поддерживает темизацию через Telegram theme params.
+- [x] **2.2** `src/services/payment_service.py` (stub-версия):
+  `create_stub_payment_url(tariff, tenant_id)` + `is_billing_configured`.
+  Запись в БД не создаём (вернёмся, когда подключим ЮKassa).
+- [x] **2.3** Тесты `test_payment_service_stub.py` (13 шт.): URL
+  формируется корректно, нормализация регистра, валидация payable
+  тарифов → commit `feat(billing): stub-страница оплаты до подключения
+  эквайринга` → push.
 
 ## Блок 3. subscription_service
 
@@ -145,29 +150,44 @@
   commit `feat(ui): личный кабинет с тарифами, оплатой и историей
   платежей` → push.
 
-## Блок 7. ЮKassa тест-режим + smoke в проде
+## Блок 7. Ручная активация подписок + документация (вместо ЮKassa smoke)
 
-- [ ] **7.1** Завести ЮKassa тест-аккаунт (или взять у клиента, если
-  уже есть), получить `YOOKASSA_SHOP_ID` и `YOOKASSA_SECRET_KEY`
-  (тестовые).
-- [ ] **7.2** Прописать в `/opt/rusprofile-parser/.env`:
-  - `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `YOOKASSA_WEBHOOK_SECRET`
-  - `BASIC_PRICE_RUB`, `PRO_PRICE_RUB`
-  - `TRIAL_DAYS=7`, `TRIAL_PARSES_LIMIT=10`
-- [ ] **7.3** Зарегистрировать webhook URL в ЮKassa-кабинете:
-  `https://parserclients.ru/api/billing/yookassa-webhook`.
-- [ ] **7.4** End-to-end тест в проде с тестовой картой ЮKassa
-  (`5555 5555 5555 4444` — успешная, `5555 5555 5555 4477` — отказ):
-  - Создание нового tenant → trial выдан
-  - Оплата Basic → подписка активна
-  - Парсинг работает
-  - Cancel → доступ до expires_at
-  - Истечение → блок + уведомление
-- [ ] **7.5** `docs/billing_guide.md` — гид для клиента: как
-  оформить ИП в ЮKassa, как переключить из тест-режима в боевой,
-  что нужно от клиента для запуска платежей.
-- [ ] **7.6** Финальный commit `docs(billing): гид клиента + acceptance
-  testing complete` → push.
+> Полный smoke с ЮKassa отложен до получения эквайринга у клиента
+> (см. отдельный итем «После эквайринга»). Сейчас — минимум, чтобы
+> можно было ВРУЧНУЮ активировать подписку платежом «вне системы».
+
+- [ ] **7.1** CLI-скрипт `scripts/activate_subscription.py`:
+  активирует Basic/Pro подписку для указанного `telegram_user_id`
+  с заданным сроком. Вызов: `python scripts/activate_subscription.py
+  --uid 12345 --tariff pro --months 1`.
+- [ ] **7.2** `docs/billing_manual_activation.md` — короткий гид для
+  админа: как принять оплату вне системы (банковский перевод и т.п.) и
+  активировать подписку через CLI.
+- [ ] **7.3** Smoke-тест в проде: создать новый tenant → дождаться
+  истечения trial (или истощить руками) → активировать через CLI →
+  убедиться что парсинг работает → отменить → expire.
+- [ ] **7.4** Финальный commit `docs(billing): ручная активация подписок
+  до получения эквайринга` → push.
+
+## Отложено: возврат к полной интеграции с ЮKassa
+
+> Когда клиент оформит эквайринг и пришлёт `YOOKASSA_SHOP_ID` +
+> `YOOKASSA_SECRET_KEY` — возвращаемся к этому списку:
+
+- [ ] **R.1** `src/services/yookassa_client.py`: AsyncYooKassaClient,
+  `create_payment`, `charge_recurrent`, `parse_webhook`.
+- [ ] **R.2** Дописать `src/services/payment_service.py`: убрать stub,
+  добавить `create_real_payment_for_tariff`, `process_webhook_*`,
+  `process_recurrent_charge`. Записывать в таблицу `payments`.
+- [ ] **R.3** Чеки 54-ФЗ.
+- [ ] **R.4** Тесты с моками HTTP-вызовов SDK.
+- [ ] **R.5** Заменить в API `create_stub_payment_url` на реальный
+  `create_real_payment_for_tariff`.
+- [ ] **R.6** Заменить кнопку «Оплатить (в разработке)» в Mini App на
+  обычную кнопку оплаты.
+- [ ] **R.7** Зарегистрировать webhook URL в ЮKassa-кабинете.
+- [ ] **R.8** End-to-end тест с тестовой картой ЮKassa.
+- [ ] **R.9** `docs/billing_guide.md` — финальный гид клиенту.
 
 ---
 
