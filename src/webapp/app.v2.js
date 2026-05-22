@@ -807,8 +807,8 @@ function renderRunCard(run) {
             </div>
         `;
     }
-    // Кнопка квалификации показывается только AI-тарифу.
-    const qualifyBtn = currentTariff === 'ai'
+    // Кнопка квалификации — для всех, у кого включён ИИ (PRO / legacy AI / dev).
+    const qualifyBtn = aiAvailable
         ? `<button type="button" class="btn-mini" data-action="qualify">
                ${run.ai_qualify_stats ? 'Перезапустить ИИ' : 'Запустить ИИ'}
            </button>`
@@ -934,7 +934,19 @@ async function onRunAction(runId, action, btn) {
 // =====================================================================
 
 let currentTariff = 'simple';
+let aiAvailable = false;
+let isDeveloper = false;
 let cachedProfiles = [];
+
+// Человеко-читаемые названия тарифов для плашки.
+const TARIFF_LABELS = {
+    simple: 'Simple',
+    ai: 'AI',
+    trial: 'Trial',
+    trial_expired: 'Trial (истёк)',
+    basic: 'Basic',
+    pro: 'Pro',
+};
 
 async function loadTariff() {
     try {
@@ -942,9 +954,11 @@ async function loadTariff() {
         if (!resp.ok) return;
         const data = await resp.json();
         currentTariff = data.tariff_plan || 'simple';
+        aiAvailable = Boolean(data.is_ai_available);
+        isDeveloper = Boolean(data.is_developer);
         renderTariffBadge(data);
         applyTariffVisibility();
-        if (currentTariff === 'ai') {
+        if (aiAvailable) {
             await loadProfilesIntoSelects();
         }
     } catch (err) {
@@ -956,33 +970,47 @@ function renderTariffBadge(t) {
     const el = document.getElementById('tariffBadge');
     if (!el) return;
     el.classList.remove('hidden');
-    if (t.tariff_plan === 'ai') {
+
+    const label = TARIFF_LABELS[t.tariff_plan] || t.tariff_plan;
+    const devMark = t.is_developer ? ' · dev' : '';
+
+    if (t.is_ai_available) {
         const used = t.usage_current?.companies_processed || 0;
         const quota = t.quotas?.companies_monthly || 0;
         const pct = t.usage_current?.companies_percent || 0;
         const days = t.usage_period?.days_remaining ?? '—';
+        // 0 = без лимита (dev / legacy без квоты).
+        const usageStr = quota > 0
+            ? `${used} / ${quota} (${pct}%)`
+            : `${used} компаний · без лимита`;
+        const bar = quota > 0
+            ? `<div class="tariff-bar"><div class="tariff-bar-fill" style="width:${pct}%"></div></div>
+               <div class="tariff-meta">Сброс через ${days} дн.</div>`
+            : '';
         el.innerHTML = `
             <div class="tariff-row">
-                <strong>Тариф: AI</strong>
-                <span class="tariff-pct">${used} / ${quota} (${pct}%)</span>
+                <strong>Тариф: ${label}${devMark}</strong>
+                <span class="tariff-pct">${usageStr}</span>
             </div>
-            <div class="tariff-bar"><div class="tariff-bar-fill" style="width:${pct}%"></div></div>
-            <div class="tariff-meta">Сброс через ${days} дн.</div>
+            ${bar}
         `;
     } else {
+        // Tariff без ИИ (Simple / Trial / Basic) — поясняем что доступно.
+        const hint = t.tariff_plan === 'trial' || t.tariff_plan === 'basic'
+            ? 'ИИ-квалификация — на тарифе Pro'
+            : 'ИИ-квалификация не подключена';
         el.innerHTML = `
             <div class="tariff-row">
-                <strong>Тариф: Simple</strong>
-                <span class="tariff-pct">ИИ-квалификация не подключена</span>
+                <strong>Тариф: ${label}${devMark}</strong>
+                <span class="tariff-pct">${hint}</span>
             </div>
         `;
     }
 }
 
 function applyTariffVisibility() {
-    const isAi = currentTariff === 'ai';
     document.querySelectorAll('.ai-only').forEach((el) => {
-        el.classList.toggle('hidden', !isAi);
+        el.classList.toggle('hidden', !aiAvailable);
     });
 }
 
@@ -1012,9 +1040,9 @@ async function loadProfilesIntoSelects() {
 let editingProfile = { brief: '', name: '', extracted: null };
 
 async function loadProfilesList() {
-    if (currentTariff !== 'ai') {
+    if (!aiAvailable) {
         document.getElementById('profiles-status').textContent =
-            'Раздел доступен только на тарифе AI.';
+            'Раздел доступен на тарифе Pro (или legacy AI).';
         return;
     }
     const status = document.getElementById('profiles-status');

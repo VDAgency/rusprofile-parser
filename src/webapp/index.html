@@ -62,12 +62,17 @@
                 </div>
             </div>
 
-            <!-- ИИ-квалификация (только для AI-тарифа) -->
+            <!-- ИИ-квалификация (показывается, когда is_ai_available) -->
             <div class="form-group ai-only hidden">
                 <label for="yandex_ai_profile">ИИ-квалификация</label>
                 <select id="yandex_ai_profile" name="yandex_ai_profile">
                     <option value="">Не использовать</option>
                 </select>
+                <div class="hint">
+                    Выберите профиль — компании будут оценены ИИ
+                    (горячие/холодные). «Не использовать» — обычный
+                    парсинг без ИИ.
+                </div>
             </div>
 
             <!-- Кросс-обогащение (показываем всем тарифам) -->
@@ -303,12 +308,17 @@
                 </div>
             </div>
 
-            <!-- ИИ-квалификация (только для AI-тарифа) -->
+            <!-- ИИ-квалификация (показывается, когда is_ai_available) -->
             <div class="form-group ai-only hidden">
                 <label for="rusprofile_ai_profile">ИИ-квалификация</label>
                 <select id="rusprofile_ai_profile" name="rusprofile_ai_profile">
                     <option value="">Не использовать</option>
                 </select>
+                <div class="hint">
+                    Выберите профиль — компании будут оценены ИИ
+                    (горячие/холодные). «Не использовать» — обычный
+                    парсинг без ИИ.
+                </div>
             </div>
 
             <!-- Кросс-обогащение (показываем всем тарифам) -->

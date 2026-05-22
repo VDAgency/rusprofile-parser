@@ -74,6 +74,7 @@ async def get_tariff(request: web.Request) -> web.Response:
 
     return web.json_response({
         "tariff_plan": tenant.tariff_plan,
+        "is_developer": tariff_helpers.is_developer(tenant),
         "is_ai_available": ai_ok,
         "is_parsing_available": parsing.ok,
         "parsing_blocked_reason": parsing.reason,
@@ -113,6 +114,7 @@ def _empty_response() -> dict:
     """Возврат для tenant'ов, которых ещё нет в БД."""
     return {
         "tariff_plan": "trial",  # tenant получит при первом /start
+        "is_developer": False,
         "is_ai_available": False,
         "is_parsing_available": True,
         "parsing_blocked_reason": None,
@@ -181,14 +183,15 @@ async def qualify_run_endpoint(request: web.Request) -> web.Response:
         if run is None:
             return web.json_response({"error": "run_not_found"}, status=404)
         tenant_id = tenant.id
-        tariff_plan = tenant.tariff_plan
+        ai_available = tariff_helpers.is_ai_available(tenant)
 
-    # На AI-тарифе профиль обязателен.
-    if profile_id is None and tariff_plan == "ai":
+    # Когда ИИ доступен (PRO / legacy AI / dev) и profile_id не задан —
+    # просто откажем: для квалификации нужен профиль.
+    if profile_id is None and ai_available:
         return web.json_response(
             {
                 "error": "profile_required",
-                "message": "Для AI-тарифа нужен ai_profile_id",
+                "message": "Для ИИ-квалификации нужен ai_profile_id",
             },
             status=400,
         )
