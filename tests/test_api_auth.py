@@ -104,3 +104,56 @@ def test_signature_appended_after_hash_is_rejected(patched_token):
     init = _build_init_data(user_id=42, username="vasya")
     tampered = init + "&signature=fake"
     assert patched_token.get_user_id(tampered) is None
+
+
+# ─── signed_uid (fallback для клиентов с пустым initData) ─────────────
+
+
+def test_signed_uid_roundtrip(patched_token):
+    """make_signed_uid + verify_signed_uid: тот же uid вернётся обратно."""
+    uid, ts, sig = patched_token.make_signed_uid(123456789)
+    assert patched_token.verify_signed_uid(uid, ts, sig) == 123456789
+
+
+def test_signed_uid_accepts_string_inputs(patched_token):
+    """UI пришлёт всё как строки из query — verify должен это съесть."""
+    uid, ts, sig = patched_token.make_signed_uid(42)
+    assert patched_token.verify_signed_uid(str(uid), str(ts), sig) == 42
+
+
+def test_signed_uid_wrong_signature_rejected(patched_token):
+    uid, ts, _sig = patched_token.make_signed_uid(42)
+    assert patched_token.verify_signed_uid(uid, ts, "00" * 32) is None
+
+
+def test_signed_uid_tampered_uid_rejected(patched_token):
+    """Подменили uid — sig перестанет совпадать."""
+    _uid, ts, sig = patched_token.make_signed_uid(42)
+    assert patched_token.verify_signed_uid(99, ts, sig) is None
+
+
+def test_signed_uid_expired_rejected(patched_token):
+    """Подпись старше TTL должна быть отвергнута."""
+    ttl = patched_token.SIGNED_UID_TTL_SECONDS
+    old_ts = int(time.time()) - ttl - 60
+    uid, ts, sig = patched_token.make_signed_uid(42, ts=old_ts)
+    assert patched_token.verify_signed_uid(uid, ts, sig) is None
+
+
+def test_signed_uid_future_rejected(patched_token):
+    """Подпись из далёкого будущего — подозрительно, отвергаем (>5 мин)."""
+    future_ts = int(time.time()) + 600
+    uid, ts, sig = patched_token.make_signed_uid(42, ts=future_ts)
+    assert patched_token.verify_signed_uid(uid, ts, sig) is None
+
+
+def test_signed_uid_missing_parts_rejected(patched_token):
+    uid, ts, sig = patched_token.make_signed_uid(42)
+    assert patched_token.verify_signed_uid(None, ts, sig) is None
+    assert patched_token.verify_signed_uid(uid, None, sig) is None
+    assert patched_token.verify_signed_uid(uid, ts, None) is None
+
+
+def test_signed_uid_non_numeric_rejected(patched_token):
+    assert patched_token.verify_signed_uid("abc", "123", "00" * 32) is None
+    assert patched_token.verify_signed_uid("42", "abc", "00" * 32) is None

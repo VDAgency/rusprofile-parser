@@ -23,7 +23,7 @@ from sqlalchemy import select
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
-from src.api.auth import get_user_id, get_username
+from src.api.auth import get_user_id, get_username, verify_signed_uid
 from src.api.export_xlsx import export_run_to_xlsx
 from src.config import (
     ALLOW_UNSAFE_USER_IDS,
@@ -70,12 +70,24 @@ async def auth_middleware(request: web.Request, handler: Callable):
     auth_mode = "initData"
 
     if not user_id:
-        # Fallback: некоторые клиенты (Telegram Desktop под Windows)
-        # не передают `tg.initData`. Принимаем заявленный user_id из
-        # `X-Telegram-User-Id-Unsafe` ИЛИ из query-параметра `?uid=`,
-        # **только** если он в whitelist (см. ALLOW_UNSAFE_USER_IDS в
-        # .env). Query-параметр нужен потому, что некоторые WebView
-        # фильтруют кастомные заголовки.
+        # Fallback 1: signed_uid из URL Mini App. Бот при отправке
+        # WebApp-кнопки подкладывает в URL `?signed_uid=<id>&ts=<unix>&sig=<hex>`
+        # — это HMAC от TELEGRAM_BOT_TOKEN, действителен 30 дней.
+        # Работает даже там, где tg.initData пустой (Telegram Web).
+        signed_uid_val = verify_signed_uid(
+            request.query.get("signed_uid"),
+            request.query.get("ts"),
+            request.query.get("sig"),
+        )
+        if signed_uid_val:
+            user_id = signed_uid_val
+            auth_mode = "signed-uid"
+
+    if not user_id:
+        # Fallback 2 (legacy): заявленный user_id из заголовка или
+        # query `?uid=`, **только** если он в whitelist
+        # `ALLOW_UNSAFE_USER_IDS`. Оставлен для совместимости со
+        # старыми ссылками без подписи и для дев-аккаунтов.
         unsafe_raw = (
             request.headers.get("X-Telegram-User-Id-Unsafe", "")
             or request.query.get("uid", "")

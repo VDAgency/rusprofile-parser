@@ -666,7 +666,8 @@ function getUnsafeUid() {
     // 2) Обходной путь: бот подложил user_id в URL Mini App
     //    (когда has_main_web_app=false и Telegram не передаёт user).
     try {
-        const urlUid = new URLSearchParams(window.location.search).get('uid');
+        const urlUid = new URLSearchParams(window.location.search).get('uid')
+            || new URLSearchParams(window.location.search).get('signed_uid');
         if (urlUid && /^\d+$/.test(urlUid)) {
             return urlUid;
         }
@@ -679,6 +680,23 @@ function getUnsafeUid() {
     return null;
 }
 
+// Подписанная HMAC-метка из URL Mini App (?signed_uid=&ts=&sig=).
+// Бот её сгенерил при отправке WebApp-кнопки. Передаём её в каждый
+// /api/ запрос — это надёжный fallback, когда tg.initData пуст
+// (Telegram Web/Desktop под Windows и т.п.).
+function getSignedUidParams() {
+    try {
+        const qp = new URLSearchParams(window.location.search);
+        const uid = qp.get('signed_uid');
+        const ts = qp.get('ts');
+        const sig = qp.get('sig');
+        if (uid && ts && sig && /^\d+$/.test(uid) && /^\d+$/.test(ts)) {
+            return { uid, ts, sig };
+        }
+    } catch (_) { /* ignore */ }
+    return null;
+}
+
 // Передаём ВСЁ через query-параметры, без кастомных заголовков —
 // иначе Telegram WebView на части устройств блокирует запрос (CORS
 // preflight, плюс некоторые сборки режут кастомные заголовки до
@@ -688,6 +706,12 @@ function apiUrl(path) {
     const params = [];
     if (tg.initData) {
         params.push('init_data=' + encodeURIComponent(tg.initData));
+    }
+    const signed = getSignedUidParams();
+    if (signed) {
+        params.push('signed_uid=' + encodeURIComponent(signed.uid));
+        params.push('ts=' + encodeURIComponent(signed.ts));
+        params.push('sig=' + encodeURIComponent(signed.sig));
     }
     const uid = getUnsafeUid();
     if (uid) {

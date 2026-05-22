@@ -123,3 +123,84 @@ def get_username(init_data: str) -> str | None:
     if isinstance(user, dict):
         return user.get("username")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Signed UID — независимая от Telegram initData аутентификация.
+#
+# Зачем: у части Telegram-клиентов (Web/Desktop под Windows/macOS)
+# `tg.initData` приходит пустым, и сервер не может верифицировать
+# user_id штатным путём. Мы выдаём пользователю одноразовую подписанную
+# ссылку на Mini App вида:
+#
+#   https://parserclients.ru/app/?signed_uid=<id>&ts=<unix>&sig=<hex>
+#
+# Бот генерирует её под каждого user_id перед отправкой кнопки
+# WebApp (см. `bot.handlers._webapp_url_for`). UI читает три параметра
+# из location.search и шлёт их в каждый /api/-запрос как query.
+# Сервер пересчитывает HMAC и сравнивает.
+#
+# Подпись = HMAC-SHA256(TELEGRAM_BOT_TOKEN, f"{user_id}:{ts}").hexdigest()
+# TTL = 30 дней (баланс безопасности и удобства: пользователь может
+# вернуться к боту через неделю и старая ссылка ещё работает).
+# ---------------------------------------------------------------------------
+
+SIGNED_UID_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
+def make_signed_uid(user_id: int, ts: int | None = None) -> tuple[int, int, str]:
+    """Возвращает (user_id, ts, sig) для встраивания в URL Mini App."""
+    if ts is None:
+        ts = int(time.time())
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN пустой — подписать нечем")
+    payload = f"{int(user_id)}:{int(ts)}".encode("utf-8")
+    sig = hmac.new(
+        TELEGRAM_BOT_TOKEN.encode("utf-8"), payload, hashlib.sha256,
+    ).hexdigest()
+    return int(user_id), int(ts), sig
+
+
+def verify_signed_uid(
+    signed_uid: str | int | None,
+    ts: str | int | None,
+    sig: str | None,
+) -> int | None:
+    """Проверяет HMAC. Возвращает user_id (int) или None.
+
+    Логирует причину отказа в WARNING. Не логирует сам sig.
+    """
+    if not signed_uid or not ts or not sig:
+        return None
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN пустой — signed_uid проверить нечем")
+        return None
+    try:
+        uid_int = int(signed_uid)
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        logger.warning("signed_uid/ts не int: uid=%r ts=%r", signed_uid, ts)
+        return None
+    if uid_int <= 0 or ts_int <= 0:
+        return None
+
+    age = time.time() - ts_int
+    if age > SIGNED_UID_TTL_SECONDS:
+        logger.warning(
+            "signed_uid просрочен: uid=%d age=%.0fs > %ds",
+            uid_int, age, SIGNED_UID_TTL_SECONDS,
+        )
+        return None
+    if age < -300:
+        # Допускаем 5 минут расхождения времени; больше — подозрительно.
+        logger.warning("signed_uid из будущего: uid=%d age=%.0fs", uid_int, age)
+        return None
+
+    payload = f"{uid_int}:{ts_int}".encode("utf-8")
+    expected = hmac.new(
+        TELEGRAM_BOT_TOKEN.encode("utf-8"), payload, hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        logger.warning("signed_uid hash mismatch: uid=%d", uid_int)
+        return None
+    return uid_int

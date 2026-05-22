@@ -37,22 +37,27 @@ BTN_HELP = "ℹ️ Помощь"
 
 
 def _webapp_url_for(user_id: int | None) -> str:
-    """Возвращает URL Mini App с подставленным uid в query.
+    """Возвращает URL Mini App с подписанной auth-меткой в query.
 
     Если бот не зарегистрирован как Mini App в BotFather (поле
-    `has_main_web_app=false`), Telegram не передаёт ни `initData`,
-    ни `initDataUnsafe.user`. Без user_id наш бэкенд ничего не может
-    идентифицировать и возвращает 401 на /api/.
+    `has_main_web_app=false`), Telegram не передаёт `initData` —
+    бэкенд не может идентифицировать user_id, отдаёт 401.
 
-    Обходной путь: подкладываем user_id прямо в URL — JS Mini App
-    прочитает его из window.location.search и передаст в API. Сервер
-    приложит whitelist-проверку (`ALLOW_UNSAFE_USER_IDS`).
+    Решение: подписываем (user_id, ts) HMAC'ом от TELEGRAM_BOT_TOKEN
+    и кладём в query `?signed_uid=<id>&ts=<unix>&sig=<hex>`. UI читает
+    их из location.search и шлёт в каждый /api/-запрос; сервер
+    верифицирует HMAC. Подпись валидна 30 дней
+    (см. `src.api.auth.SIGNED_UID_TTL_SECONDS`).
+
+    Если `user_id` не задан — отдаём базовый URL без подписи.
     """
     base = TELEGRAM_WEBAPP_URL or ""
     if not base or not user_id:
         return base
+    from src.api.auth import make_signed_uid
+    uid, ts, sig = make_signed_uid(user_id)
     sep = "&" if "?" in base else "?"
-    return f"{base}{sep}uid={user_id}"
+    return f"{base}{sep}signed_uid={uid}&ts={ts}&sig={sig}"
 
 
 def _get_main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
