@@ -86,6 +86,13 @@ def check_can_use_ai(tenant: Tenant) -> tuple[bool, str | None]:
     ``reset_if_period_expired``. Поэтому перед каждым вызовом ИИ-стадии
     в qualify_service сначала вызвать reset, потом check.
     """
+    # Dev-whitelist: всегда True, минуя тариф и квоты.
+    # Счётчики при этом всё равно инкрементируются (см. increment_*),
+    # чтобы в Кабинете dev видел реальные расходы LLM.
+    from src.services.tariff_helpers import is_developer
+    if is_developer(tenant):
+        return True, None
+
     # ИИ доступен на Pro и legacy AI. Trial/Basic/Simple — без ИИ.
     if tenant.tariff_plan not in (TariffPlan.AI.value, TariffPlan.PRO.value):
         return False, "tariff_not_ai"

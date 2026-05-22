@@ -103,6 +103,30 @@ if _unsafe_raw:
         if chunk.isdigit():
             ALLOW_UNSAFE_USER_IDS.add(int(chunk))
 
+# Dev-whitelist разработчиков. У этих tenant'ов всегда включены
+# Pro-тариф и ИИ-квалификация, без срока подписки и без квот.
+# Используется в `tariff_helpers.is_developer` и `ensure_tenant`.
+# Формат:
+#   DEV_USER_IDS="546373554,12345678"     — Telegram user_id (приоритет)
+#   DEV_USERNAMES="stefanidi63,vdagency"  — username без @ (fallback)
+# Username — на случай, если новый dev зайдёт в бот раньше, чем мы
+# узнаем его user_id.
+_dev_ids_raw = os.getenv("DEV_USER_IDS", "").strip()
+DEV_USER_IDS: set[int] = set()
+if _dev_ids_raw:
+    for chunk in _dev_ids_raw.split(","):
+        chunk = chunk.strip()
+        if chunk.isdigit():
+            DEV_USER_IDS.add(int(chunk))
+
+_dev_usernames_raw = os.getenv("DEV_USERNAMES", "").strip()
+DEV_USERNAMES: set[str] = set()
+if _dev_usernames_raw:
+    for chunk in _dev_usernames_raw.split(","):
+        chunk = chunk.strip().lstrip("@").lower()
+        if chunk:
+            DEV_USERNAMES.add(chunk)
+
 # Лимит «новых» компаний за один запуск парсинга — общий для всех
 # источников. UI ограничивает выбором 1..MAX_NEW_HARD_LIMIT.
 DEFAULT_MAX_NEW = 100

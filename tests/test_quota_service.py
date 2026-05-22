@@ -136,3 +136,41 @@ def test_usage_warning_threshold(ai_tenant):
     ai_tenant.ai_companies_processed_period = 70
     usage = quota_service.get_usage(ai_tenant)
     assert quota_service.usage_warning_threshold(usage) is False
+
+
+# --- Dev-whitelist bypass ----------------------------------------------
+
+
+@pytest.fixture
+def dev_tenant(db_session, monkeypatch):
+    """Tenant в dev-whitelist — на любом тарифе должен пройти проверку."""
+    from src import config
+    monkeypatch.setattr(config, "DEV_USER_IDS", {999000}, raising=False)
+    monkeypatch.setattr(config, "DEV_USERNAMES", set(), raising=False)
+    t = Tenant(
+        telegram_user_id=999000,
+        tariff_plan=TariffPlan.TRIAL.value,   # ИИ обычно недоступен на Trial
+        ai_quota_companies_monthly=0,
+        ai_quota_tokens_monthly=0,
+    )
+    db_session.add(t)
+    db_session.flush()
+    return t
+
+
+def test_dev_bypasses_tariff_check(dev_tenant):
+    """Trial-tenant в dev-whitelist получает ok=True вместо tariff_not_ai."""
+    ok, reason = quota_service.check_can_use_ai(dev_tenant)
+    assert ok is True
+    assert reason is None
+
+
+def test_dev_bypasses_quota_exceeded(db_session, dev_tenant):
+    """Dev не блокируется даже при «исчерпанной» квоте — у него её нет."""
+    dev_tenant.tariff_plan = TariffPlan.PRO.value
+    dev_tenant.ai_quota_companies_monthly = 10
+    dev_tenant.ai_companies_processed_period = 100   # «исчерпано»
+    db_session.flush()
+    ok, reason = quota_service.check_can_use_ai(dev_tenant)
+    assert ok is True
+    assert reason is None

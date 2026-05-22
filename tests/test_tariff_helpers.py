@@ -11,6 +11,7 @@ from src.db.models import BlockedReason, TariffPlan, Tenant
 from src.services.tariff_helpers import (
     get_trial_snapshot,
     is_ai_available,
+    is_developer,
     is_paid_plan,
     is_parsing_available,
     is_trial,
@@ -199,3 +200,98 @@ def test_snapshot_for_expired_trial_days_zero():
     )
     snap = get_trial_snapshot(t)
     assert snap.days_left == 0
+
+
+# ─── is_developer / dev-bypass ───────────────────────────────────────────
+
+
+@pytest.fixture
+def dev_whitelist(monkeypatch):
+    """Подменяет DEV_USER_IDS/DEV_USERNAMES в config на детерм. наборы."""
+    from src import config
+    monkeypatch.setattr(config, "DEV_USER_IDS", {111222333}, raising=False)
+    monkeypatch.setattr(config, "DEV_USERNAMES", {"vdagency"}, raising=False)
+
+
+def test_is_developer_by_user_id(dev_whitelist):
+    t = _tenant(telegram_user_id=111222333, tariff_plan=TariffPlan.TRIAL.value)
+    assert is_developer(t) is True
+
+
+def test_is_developer_by_username_case_insensitive(dev_whitelist):
+    t = _tenant(
+        telegram_user_id=999, username="VDAgency",
+        tariff_plan=TariffPlan.TRIAL.value,
+    )
+    assert is_developer(t) is True
+
+
+def test_is_developer_username_with_at_sign(dev_whitelist):
+    """username с @ в начале — тоже валиден (на всякий случай)."""
+    t = _tenant(telegram_user_id=999, username="@vdagency")
+    assert is_developer(t) is True
+
+
+def test_is_developer_false_for_random_user(dev_whitelist):
+    t = _tenant(telegram_user_id=888, username="random_user")
+    assert is_developer(t) is False
+
+
+def test_is_developer_false_when_whitelist_empty(monkeypatch):
+    from src import config
+    monkeypatch.setattr(config, "DEV_USER_IDS", set(), raising=False)
+    monkeypatch.setattr(config, "DEV_USERNAMES", set(), raising=False)
+    t = _tenant(telegram_user_id=111222333, username="vdagency")
+    assert is_developer(t) is False
+
+
+def test_dev_ai_available_on_any_tariff(dev_whitelist):
+    """Dev получает ИИ даже на Trial / TRIAL_EXPIRED."""
+    for plan in (
+        TariffPlan.TRIAL.value, TariffPlan.TRIAL_EXPIRED.value,
+        TariffPlan.SIMPLE.value, TariffPlan.BASIC.value,
+    ):
+        t = _tenant(telegram_user_id=111222333, tariff_plan=plan)
+        assert is_ai_available(t) is True, f"plan={plan}"
+
+
+def test_dev_ai_available_even_when_blocked(dev_whitelist):
+    """Dev игнорирует is_blocked (мы не должны блокировать самих себя)."""
+    t = _tenant(
+        telegram_user_id=111222333,
+        tariff_plan=TariffPlan.TRIAL_EXPIRED.value,
+        is_blocked=True,
+        blocked_reason=BlockedReason.SUBSCRIPTION_BLOCKED.value,
+    )
+    assert is_ai_available(t) is True
+
+
+def test_dev_parsing_available_when_trial_expired(dev_whitelist):
+    """Dev на TRIAL_EXPIRED с просроченными датами — всё равно ok."""
+    t = _tenant(
+        telegram_user_id=111222333,
+        tariff_plan=TariffPlan.TRIAL_EXPIRED.value,
+        trial_parses_left=0,
+        trial_expires_at=datetime.now(timezone.utc) - timedelta(days=30),
+    )
+    res = is_parsing_available(t)
+    assert res.ok is True
+    assert res.reason is None
+
+
+def test_dev_parsing_available_when_blocked(dev_whitelist):
+    t = _tenant(
+        telegram_user_id=111222333,
+        tariff_plan=TariffPlan.PRO.value,
+        is_blocked=True,
+        blocked_reason=BlockedReason.SUBSCRIPTION_BLOCKED.value,
+    )
+    assert is_parsing_available(t).ok is True
+
+
+def test_dev_is_paid_plan(dev_whitelist):
+    """Для UI Кабинета: dev считается paid даже на Trial."""
+    t = _tenant(
+        telegram_user_id=111222333, tariff_plan=TariffPlan.TRIAL.value,
+    )
+    assert is_paid_plan(t) is True

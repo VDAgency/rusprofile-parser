@@ -80,8 +80,33 @@ def _ensure_aware(ts: datetime | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 
+def is_developer(tenant: Tenant) -> bool:
+    """Tenant в dev-whitelist (DEV_USER_IDS / DEV_USERNAMES в .env).
+
+    Разработчики получают «вечный Pro» без срока подписки и без квот:
+    минуя is_blocked, trial, квоты — всегда доступны и парсинг, и ИИ.
+
+    Why: нам со Станиславом нужно тестировать прод-бота без покупки
+    подписки и без истечения Trial. Whitelist живёт в .env, чтобы
+    добавлять новых dev'ов не требовалось деплоить код.
+
+    Сопоставление: сначала по telegram_user_id (стабильно), затем —
+    по username (case-insensitive, без @). Если хотя бы один матч —
+    True.
+    """
+    from src import config
+    if tenant.telegram_user_id in config.DEV_USER_IDS:
+        return True
+    if tenant.username:
+        if tenant.username.lstrip("@").lower() in config.DEV_USERNAMES:
+            return True
+    return False
+
+
 def is_paid_plan(tenant: Tenant) -> bool:
     """Это «уже оплачено» (legacy simple/ai или активные basic/pro)."""
+    if is_developer(tenant):
+        return True
     return tenant.tariff_plan in _PAID_PLANS
 
 
@@ -89,7 +114,10 @@ def is_ai_available(tenant: Tenant) -> bool:
     """Доступна ли ИИ-квалификация (Pro / legacy AI).
 
     Trial и Basic — ИИ недоступен, только парсинг + сорт-скор.
+    Dev — всегда доступно, минуя is_blocked.
     """
+    if is_developer(tenant):
+        return True
     if tenant.is_blocked:
         return False
     return tenant.tariff_plan in _AI_PLANS
@@ -120,6 +148,10 @@ def is_parsing_available(tenant: Tenant) -> ParsingAvailability:
 
     Возвращает ``ParsingAvailability(ok, reason, message)``.
     """
+    # Dev-whitelist: всегда разрешено, минуя любые блокировки/Trial.
+    if is_developer(tenant):
+        return ParsingAvailability(ok=True)
+
     if tenant.is_blocked:
         reason = tenant.blocked_reason or BlockedReason.SUBSCRIPTION_BLOCKED.value
         return ParsingAvailability(

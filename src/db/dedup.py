@@ -130,19 +130,37 @@ def ensure_tenant(
         # Этап 3: новый tenant получает Trial (7 дней / 10 парсингов).
         # Существующих tenant'ов миграция НЕ трогает — они остаются на
         # legacy `simple` / `ai` (бессрочно).
+        # Dev-whitelist (DEV_USER_IDS / DEV_USERNAMES в .env) минует
+        # Trial: сразу Pro + ИИ-квоты (0 = без лимита).
         from datetime import timedelta
-        from src.config import TRIAL_DAYS, TRIAL_PARSES_LIMIT
+        from src import config
         from src.db.models import TariffPlan
 
         now = datetime.now(timezone.utc)
-        tenant = Tenant(
-            telegram_user_id=telegram_user_id,
-            username=username,
-            tariff_plan=TariffPlan.TRIAL.value,
-            trial_started_at=now,
-            trial_expires_at=now + timedelta(days=TRIAL_DAYS),
-            trial_parses_left=TRIAL_PARSES_LIMIT,
+        username_norm = (username or "").lstrip("@").lower()
+        is_dev = (
+            telegram_user_id in config.DEV_USER_IDS
+            or (username_norm and username_norm in config.DEV_USERNAMES)
         )
+        if is_dev:
+            tenant = Tenant(
+                telegram_user_id=telegram_user_id,
+                username=username,
+                tariff_plan=TariffPlan.PRO.value,
+                # 0 = без лимита (см. quota_service.check_can_use_ai)
+                ai_quota_companies_monthly=0,
+                ai_quota_tokens_monthly=0,
+                quota_period_start=now,
+            )
+        else:
+            tenant = Tenant(
+                telegram_user_id=telegram_user_id,
+                username=username,
+                tariff_plan=TariffPlan.TRIAL.value,
+                trial_started_at=now,
+                trial_expires_at=now + timedelta(days=config.TRIAL_DAYS),
+                trial_parses_left=config.TRIAL_PARSES_LIMIT,
+            )
         session.add(tenant)
         session.flush()
     elif username and tenant.username != username:
